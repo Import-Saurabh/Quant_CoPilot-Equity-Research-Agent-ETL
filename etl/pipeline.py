@@ -43,7 +43,6 @@ from etl.extract.macro              import fetch_market_indices, fetch_rbi_rates
 from etl.extract.ownership          import fetch_ownership
 from etl.extract.earnings           import fetch_earnings
 from etl.extract.growth             import fetch_growth_metrics
-from etl.extract.quarterly_cashflow import fetch_quarterly_cashflow
 from etl.extract.screener           import fetch_screener_data
 
 from etl.load.stock_loader              import insert_stock
@@ -59,7 +58,6 @@ from etl.load.ownership_loader          import load_ownership
 from etl.load.earnings_loader           import (load_earnings_history, load_earnings_estimates,
                                                 load_eps_trend, load_eps_revisions)
 from etl.load.growth_loader             import load_growth_metrics
-from etl.load.quarterly_cashflow_loader import load_quarterly_cashflow
 from etl.load.run_log_loader            import log_run
 from etl.load.screener_loader           import load_all_screener
 from etl.load.reconcile                 import run_reconciliation
@@ -262,23 +260,6 @@ def run_pipeline(symbol_yf: str = "ADANIPORTS.NS"):
     except Exception as e:
         print(f"  error growth_metrics_yf: {e}"); warn_mods.append("growth_metrics_yf")
 
-    try:
-        q_inc_raw = stmts.get("q_income")      if stmts else None
-        q_bs_ext  = stmts.get("q_bs_extended") if stmts else None
-        q_bs_raw  = stmts.get("q_bs")          if stmts else None
-
-        qcf_records = fetch_quarterly_cashflow(
-            symbol_yf,
-            q_inc=_safe_df(q_inc_raw),
-            q_bs_extended=_safe_df(q_bs_ext),
-            bs_audit=stmts.get("bs_audit", {}) if stmts else {},
-            q_bs_real=_safe_df(q_bs_raw),
-        )
-        load_quarterly_cashflow(qcf_records, symbol_nse)
-        ok_mods.append("quarterly_cashflow")
-    except Exception as e:
-        print(f"  error quarterly_cashflow: {e}"); warn_mods.append("quarterly_cashflow")
-
     # ── Dedup ──────────────────────────────────────────────────
     print(f"\n[DEDUP]...")
     try:
@@ -306,7 +287,7 @@ def run_pipeline(symbol_yf: str = "ADANIPORTS.NS"):
         "fundamentals", "growth_metrics",
         "quarterly_results", "annual_results",
         "income_statement", "balance_sheet",
-        "cash_flow", "quarterly_cashflow_derived",
+        "cash_flow", "annual_cashflow_derived",
     ]:
         audit_table(symbol_nse, tbl)
 

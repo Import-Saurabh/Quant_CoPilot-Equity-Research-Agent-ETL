@@ -1,21 +1,14 @@
 """
-etl/load/reconcile.py  v2.1
+etl/load/reconcile.py  v3.0
 ────────────────────────────────────────────────────────────────
-Changes vs v2.0:
-  FIX — reconcile_balance_sheet() was crashing with:
-    sqlite3.OperationalError: no such column: completeness_pct
-    sqlite3.OperationalError: no such column: missing_fields_json
-
-  Root cause: the balance_sheet table was created from schema v3
-  which didn't include those two columns.  screener_loader.py's
-  _ensure_bs_columns() adds them at load time, but if reconcile
-  runs on a DB that was populated before v5.1 of screener_loader,
-  the columns may still be absent.
-
-  Fix: _ensure_bs_extra_cols() runs at the top of
-  reconcile_balance_sheet() and defensively ADDs the two columns
-  if missing (idempotent — ALTER TABLE on an existing column is
-  caught and ignored).
+Changes vs v2.1:
+  • reconcile_quarterly_cashflow() REMOVED — quarterly_cashflow_derived
+    table has been deleted.
+  • reconcile_annual_cashflow_derived() ADDED — calls
+    cashflow_loader.rebuild_annual_cashflow_derived() which joins
+    annual_results + cash_flow and guarantees zero NULLs in
+    annual_cashflow_derived for all core columns.
+  • run_reconciliation() updated accordingly.
 ────────────────────────────────────────────────────────────────
 """
 
@@ -220,32 +213,18 @@ def reconcile_income_statement(symbol: str, conn):
 
 
 # ─────────────────────────────────────────────
-# 4. QUARTERLY CASHFLOW DERIVED
+# 4. ANNUAL CASHFLOW DERIVED
 # ─────────────────────────────────────────────
-def reconcile_quarterly_cashflow(symbol: str, conn):
-
-    rows = conn.execute("""
-        SELECT rowid, net_income, dna
-        FROM quarterly_cashflow_derived
-        WHERE symbol = ?
-    """, (symbol,)).fetchall()
-
-    for rowid, ni, dna in rows:
-        ni  = _f(ni)
-        dna = _f(dna)
-
-        op_cf = None
-        if ni is not None and dna is not None:
-            op_cf = round(ni + dna, 2)
-
-        conn.execute("""
-            UPDATE quarterly_cashflow_derived SET
-                approx_op_cf = COALESCE(approx_op_cf, ?)
-            WHERE rowid = ?
-        """, (op_cf, rowid))
-
-    conn.commit()
-    print(f"  ✅ reconcile quarterly_cashflow: {len(rows)} rows for {symbol}")
+def reconcile_annual_cashflow_derived(symbol: str, conn):
+    """
+    Rebuild annual_cashflow_derived so no core column is NULL.
+    Delegates to cashflow_loader.rebuild_annual_cashflow_derived()
+    which joins annual_results + cash_flow and fills every row.
+    """
+    conn.commit()  # flush any pending writes before handing off
+    from etl.load.cashflow_loader import rebuild_annual_cashflow_derived
+    rebuild_annual_cashflow_derived(symbol)
+    print(f"  ✅ reconcile annual_cashflow_derived: complete for {symbol}")
 
 
 # ─────────────────────────────────────────────
@@ -324,7 +303,7 @@ def run_reconciliation(symbol: str):
         reconcile_balance_sheet(symbol, conn)
         reconcile_cash_flow(symbol, conn)
         reconcile_income_statement(symbol, conn)
-        reconcile_quarterly_cashflow(symbol, conn)
+        reconcile_annual_cashflow_derived(symbol, conn)
         reconcile_growth_metrics(symbol, conn)
         reconcile_fundamentals(symbol, conn)
     finally:
