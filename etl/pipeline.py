@@ -254,12 +254,11 @@ def run_pipeline(symbol_yf: str = "ADANIPORTS.NS"):
     # ── 11. Growth + Quarterly FCF ─────────────────────────────
     print(f"\n[11/11] Growth + quarterly FCF...")
     try:
-        growth = fetch_growth_metrics(symbol_yf)
+        growth = fetch_growth_metrics(symbol_nse)   # ← changed from symbol_yf
         load_growth_metrics(growth, symbol_nse)
         ok_mods.append("growth_metrics_yf")
     except Exception as e:
         print(f"  error growth_metrics_yf: {e}"); warn_mods.append("growth_metrics_yf")
-
     # ── Dedup ──────────────────────────────────────────────────
     print(f"\n[DEDUP]...")
     try:

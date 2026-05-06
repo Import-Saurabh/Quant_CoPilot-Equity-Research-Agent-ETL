@@ -231,15 +231,16 @@ def reconcile_annual_cashflow_derived(symbol: str, conn):
 # 5. GROWTH METRICS
 # ─────────────────────────────────────────────
 def reconcile_growth_metrics(symbol: str, conn):
-
-    rows = conn.execute("""
+    # 1. Get historical data from annual_results for revenue & net_profit
+    ar_rows = conn.execute("""
         SELECT period_end, sales, net_profit
         FROM annual_results
         WHERE symbol = ?
         ORDER BY period_end DESC
     """, (symbol,)).fetchall()
 
-    if len(rows) < 3:
+    if len(ar_rows) < 4:
+        print(f"  ⚠️  reconcile growth_metrics: not enough annual_results rows for {symbol}")
         return
 
     def cagr(end, start, years):
@@ -247,23 +248,52 @@ def reconcile_growth_metrics(symbol: str, conn):
             return None
         return round(((end / start) ** (1 / years) - 1) * 100, 2)
 
-    sales  = [_f(r[1]) for r in rows]
-    profit = [_f(r[2]) for r in rows]
+    sales  = [_f(r[1]) for r in ar_rows]
+    profit = [_f(r[2]) for r in ar_rows]
 
-    s3 = cagr(sales[0],  sales[3],  3) if len(sales)  > 3 else None
-    p3 = cagr(profit[0], profit[3], 3) if len(profit) > 3 else None
+    rev_cagr  = cagr(sales[0],  sales[3],  3)
+    prof_cagr = cagr(profit[0], profit[3], 3)
 
+    # 2. EBITDA CAGR from income_statement (annual)
+    is_rows = conn.execute("""
+        SELECT ebitda, diluted_eps
+        FROM income_statement
+        WHERE symbol = ? AND period_type = 'annual'
+        ORDER BY period_end DESC
+        LIMIT 4
+    """, (symbol,)).fetchall()
+
+    ebitda_vals = [_f(r[0]) for r in is_rows if r[0] is not None]
+    eps_vals    = [_f(r[1]) for r in is_rows if r[1] is not None]
+
+    ebitda_cagr = cagr(ebitda_vals[0], ebitda_vals[3], 3) if len(ebitda_vals) >= 4 else None
+    eps_cagr    = cagr(eps_vals[0], eps_vals[3], 3) if len(eps_vals) >= 4 else None
+
+    # 3. FCF CAGR from cash_flow (annual)
+    cf_rows = conn.execute("""
+        SELECT free_cash_flow
+        FROM cash_flow
+        WHERE symbol = ? AND period_type = 'annual'
+        ORDER BY period_end DESC
+        LIMIT 4
+    """, (symbol,)).fetchall()
+
+    fcf_vals = [_f(r[0]) for r in cf_rows if r[0] is not None]
+    fcf_cagr = cagr(fcf_vals[0], fcf_vals[3], 3) if len(fcf_vals) >= 4 else None
+
+    # 4. Update the row (the one created by growth_loader today)
     conn.execute("""
         UPDATE growth_metrics SET
-            revenue_cagr_3y    = ?,
-            net_profit_cagr_3y = ?
-        WHERE symbol = ?
-    """, (s3, p3, symbol))
+            revenue_cagr_3y    = COALESCE(revenue_cagr_3y, ?),
+            net_profit_cagr_3y = COALESCE(net_profit_cagr_3y, ?),
+            ebitda_cagr_3y     = COALESCE(ebitda_cagr_3y, ?),
+            eps_cagr_3y        = COALESCE(eps_cagr_3y, ?),
+            fcf_cagr_3y        = COALESCE(fcf_cagr_3y, ?)
+        WHERE symbol = ? AND as_of_date = (SELECT MAX(as_of_date) FROM growth_metrics WHERE symbol = ?)
+    """, (rev_cagr, prof_cagr, ebitda_cagr, eps_cagr, fcf_cagr, symbol, symbol))
 
     conn.commit()
-    print(f"  ✅ reconcile growth_metrics: {symbol}")
-
-
+    print(f"  ✅ reconcile growth_metrics: {symbol} (rev={rev_cagr}, prof={prof_cagr}, ebitda={ebitda_cagr}, eps={eps_cagr}, fcf={fcf_cagr})")
 # ─────────────────────────────────────────────
 # 6. FUNDAMENTALS
 # ─────────────────────────────────────────────

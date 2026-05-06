@@ -58,8 +58,13 @@ COMPLETENESS_FIELDS = {
         "scr_free_cash_flow",
     ],
     "growth_metrics": [
-        "revenue_cagr_3y", "net_profit_cagr_3y", "fcf_cagr_3y",
-        "scr_sales_cagr_3y", "scr_profit_cagr_3y", "scr_roe_last",
+    "revenue_cagr_3y", "net_profit_cagr_3y", "ebitda_cagr_3y",
+    "eps_cagr_3y", "fcf_cagr_3y",
+    "sales_cagr_10y", "sales_cagr_5y", "sales_cagr_3y", "sales_ttm",
+    "profit_cagr_10y", "profit_cagr_5y", "profit_cagr_3y", "profit_ttm",
+    "stock_cagr_10y", "stock_cagr_5y", "stock_cagr_3y", "stock_ttm",
+    "roe_10y", "roe_5y", "roe_3y", "roe_last",
+    "growth_available",   # optional, but include if you want completeness to count it
     ],
     "fundamentals": [
         "roe_pct", "roce_pct", "pe_ratio", "pb_ratio",
