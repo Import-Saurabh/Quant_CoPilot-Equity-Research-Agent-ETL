@@ -1,13 +1,11 @@
 """
-etl/load/reconcile.py  v3.0
+etl/load/reconcile.py  v4.0
 ────────────────────────────────────────────────────────────────
-Changes vs v2.1:
-  • reconcile_quarterly_cashflow() REMOVED — quarterly_cashflow_derived
-    table has been deleted.
-  • reconcile_annual_cashflow_derived() ADDED — calls
-    cashflow_loader.rebuild_annual_cashflow_derived() which joins
-    annual_results + cash_flow and guarantees zero NULLs in
-    annual_cashflow_derived for all core columns.
+Changes vs v3.0:
+  • reconcile_income_statement() REMOVED — income_statement table gone.
+  • reconcile_profit_and_loss() ADDED — targets the new profit_and_loss
+    table; computes completeness_pct / missing_fields_json and derives
+    net_debt where possible.
   • run_reconciliation() updated accordingly.
 ────────────────────────────────────────────────────────────────
 """
@@ -43,58 +41,103 @@ def _pct(a, b) -> Optional[float]:
     return round(v * 100, 2) if v is not None else None
 
 
-def _completeness(row: dict, fields: list):
-    missing = [k for k, v in row.items() if k in fields and v is None]
-    pct = round((1 - len(missing) / len(fields)) * 100, 1) if fields else 100
+def _completeness(fields: dict) -> tuple[float, list]:
+    missing = [k for k, v in fields.items() if v is None]
+    pct = round((1 - len(missing) / len(fields)) * 100, 1) if fields else 100.0
     return pct, missing
 
 
 # ─────────────────────────────────────────────
-# Schema migration helper
+# Schema migration helpers
 # ─────────────────────────────────────────────
-def _ensure_bs_extra_cols(conn):
+def _ensure_cols(conn, table: str, col_defs: list[tuple[str, str]]):
+    """Idempotently add columns to *table* if they don't exist."""
+    for col_name, col_type in col_defs:
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
+            print(f"  db-migrate {table}: added column '{col_name}'")
+        except Exception:
+            pass  # already exists
+
+
+# ─────────────────────────────────────────────
+# 1. PROFIT & LOSS  (replaces income_statement)
+# ─────────────────────────────────────────────
+def reconcile_profit_and_loss(symbol: str, conn):
     """
-    Idempotently add completeness_pct and missing_fields_json to
-    balance_sheet if they don't exist yet.  This is the safety net
-    for DBs created before screener_loader v5.1.
+    For every row in profit_and_loss:
+      • Derive opm_pct from operating_profit / sales when the stored
+        value is NULL (some Screener pages omit it).
+      • Compute completeness_pct and missing_fields_json over the
+        core numeric columns.
     """
-    for col_name, col_type in [
+    _ensure_cols(conn, "profit_and_loss", [
         ("completeness_pct",    "REAL"),
         ("missing_fields_json", "TEXT"),
-    ]:
-        try:
-            conn.execute(
-                f"ALTER TABLE balance_sheet ADD COLUMN {col_name} {col_type}"
-            )
-            print(f"  db-migrate balance_sheet: added missing column '{col_name}'")
-        except Exception:
-            pass  # column already exists — that's fine
+    ])
+    conn.commit()
+
+    # Core columns we care about for completeness scoring
+    CORE_FIELDS = [
+        "sales", "expenses", "operating_profit", "opm_pct",
+        "other_income", "interest", "depreciation",
+        "profit_before_tax", "tax_pct", "net_profit", "eps",
+    ]
+
+    rows = conn.execute(f"""
+        SELECT rowid, {', '.join(CORE_FIELDS)}
+        FROM profit_and_loss
+        WHERE symbol = ?
+    """, (symbol,)).fetchall()
+
+    for r in rows:
+        rowid    = r[0]
+        vals     = dict(zip(CORE_FIELDS, r[1:]))
+        floats   = {k: _f(v) for k, v in vals.items()}
+
+        # Derive opm_pct if missing
+        derived_opm = None
+        if floats.get("opm_pct") is None:
+            sales = floats.get("sales")
+            op    = floats.get("operating_profit")
+            if sales and op and sales != 0:
+                derived_opm = round((op / sales) * 100, 2)
+            floats["opm_pct"] = derived_opm
+
+        comp, missing = _completeness(floats)
+
+        conn.execute("""
+            UPDATE profit_and_loss SET
+                opm_pct             = COALESCE(opm_pct, ?),
+                completeness_pct    = ?,
+                missing_fields_json = ?
+            WHERE rowid = ?
+        """, (derived_opm, comp, json.dumps(missing), rowid))
+
+    conn.commit()
+    print(f"  ✅ reconcile profit_and_loss: {len(rows)} rows for {symbol}")
 
 
 # ─────────────────────────────────────────────
-# 1. BALANCE SHEET (Screener-only)
+# 2. BALANCE SHEET
 # ─────────────────────────────────────────────
 def reconcile_balance_sheet(symbol: str, conn):
-
-    # ── Guarantee the columns exist before we try to write them ──
-    _ensure_bs_extra_cols(conn)
+    _ensure_cols(conn, "balance_sheet", [
+        ("completeness_pct",    "REAL"),
+        ("missing_fields_json", "TEXT"),
+    ])
     conn.commit()
 
     rows = conn.execute("""
         SELECT rowid,
-               total_assets,
-               total_liabilities,
-               total_equity,
-               borrowings,
-               cash_equivalents,
-               net_debt
+               total_assets, total_liabilities, total_equity,
+               borrowings, cash_equivalents, net_debt
         FROM balance_sheet
         WHERE symbol = ?
     """, (symbol,)).fetchall()
 
     for r in rows:
         rowid, ta, tl, te, debt, cash, net_d = r
-
         ta    = _f(ta)
         tl    = _f(tl)
         te    = _f(te)
@@ -113,8 +156,7 @@ def reconcile_balance_sheet(symbol: str, conn):
             "cash_equivalents":  cash,
             "net_debt":          net_d,
         }
-
-        comp, missing = _completeness(fields, list(fields.keys()))
+        comp, missing = _completeness(fields)
 
         conn.execute("""
             UPDATE balance_sheet SET
@@ -129,27 +171,15 @@ def reconcile_balance_sheet(symbol: str, conn):
 
 
 # ─────────────────────────────────────────────
-# 2. CASH FLOW
+# 3. CASH FLOW
 # ─────────────────────────────────────────────
-# Inside reconcile.py, after _ensure_bs_extra_cols, add:
-
-def _ensure_cashflow_extra_cols(conn):
-    """Idempotently add completeness columns to cash_flow."""
-    for col_name, col_type in [
+def reconcile_cash_flow(symbol: str, conn):
+    _ensure_cols(conn, "cash_flow", [
         ("completeness_pct",    "REAL"),
         ("missing_fields_json", "TEXT"),
-    ]:
-        try:
-            conn.execute(f"ALTER TABLE cash_flow ADD COLUMN {col_name} {col_type}")
-            print(f"  db-migrate cash_flow: added missing column '{col_name}'")
-        except Exception:
-            pass
-
-# Then modify reconcile_cash_flow:
-
-def reconcile_cash_flow(symbol: str, conn):
-    _ensure_cashflow_extra_cols(conn)
+    ])
     conn.commit()
+
     rows = conn.execute("""
         SELECT rowid, cfo, free_cash_flow
         FROM cash_flow
@@ -157,71 +187,25 @@ def reconcile_cash_flow(symbol: str, conn):
     """, (symbol,)).fetchall()
 
     for rowid, cfo, fcf in rows:
-        cfo = _f(cfo)
-        fcf = _f(fcf)
-        fields = {"cfo": cfo, "free_cash_flow": fcf}
-        comp, missing = _completeness(fields, list(fields.keys()))
+        fields = {"cfo": _f(cfo), "free_cash_flow": _f(fcf)}
+        comp, missing = _completeness(fields)
         conn.execute("""
             UPDATE cash_flow SET
-                completeness_pct = ?,
-                missing_fields_json = ?
-            WHERE rowid = ?
-        """, (comp, json.dumps(missing), rowid))
-
-    conn.commit()
-    print(f"  ✅ reconcile cash_flow: {len(rows)} rows for {symbol}")
-# ─────────────────────────────────────────────
-# 3. INCOME STATEMENT
-# ─────────────────────────────────────────────
-def reconcile_income_statement(symbol: str, conn):
-
-    rows = conn.execute("""
-        SELECT rowid,
-               total_revenue,
-               ebitda,
-               net_income,
-               depreciation_amortization,
-               interest_expense,
-               diluted_eps
-        FROM income_statement
-        WHERE symbol = ?
-    """, (symbol,)).fetchall()
-
-    for r in rows:
-        rowid, rev, ebitda, ni, dep, interest, eps = r
-
-        fields = {
-            "revenue":      _f(rev),
-            "ebitda":       _f(ebitda),
-            "net_income":   _f(ni),
-            "depreciation": _f(dep),
-            "interest":     _f(interest),
-            "eps":          _f(eps),
-        }
-
-        comp, missing = _completeness(fields, list(fields.keys()))
-
-        conn.execute("""
-            UPDATE income_statement SET
                 completeness_pct    = ?,
                 missing_fields_json = ?
             WHERE rowid = ?
         """, (comp, json.dumps(missing), rowid))
 
     conn.commit()
-    print(f"  ✅ reconcile income_statement: {len(rows)} rows for {symbol}")
+    print(f"  ✅ reconcile cash_flow: {len(rows)} rows for {symbol}")
 
 
 # ─────────────────────────────────────────────
 # 4. ANNUAL CASHFLOW DERIVED
 # ─────────────────────────────────────────────
 def reconcile_annual_cashflow_derived(symbol: str, conn):
-    """
-    Rebuild annual_cashflow_derived so no core column is NULL.
-    Delegates to cashflow_loader.rebuild_annual_cashflow_derived()
-    which joins annual_results + cash_flow and fills every row.
-    """
-    conn.commit()  # flush any pending writes before handing off
+    """Delegates to cashflow_loader.rebuild_annual_cashflow_derived()."""
+    conn.commit()
     from etl.load.cashflow_loader import rebuild_annual_cashflow_derived
     rebuild_annual_cashflow_derived(symbol)
     print(f"  ✅ reconcile annual_cashflow_derived: complete for {symbol}")
@@ -231,45 +215,66 @@ def reconcile_annual_cashflow_derived(symbol: str, conn):
 # 5. GROWTH METRICS
 # ─────────────────────────────────────────────
 def reconcile_growth_metrics(symbol: str, conn):
-    # 1. Get historical data from annual_results for revenue & net_profit
-    ar_rows = conn.execute("""
+    """
+    Re-computes 3-year CAGRs from profit_and_loss + cash_flow.
+    Falls back to annual_results for sales / net_profit if needed.
+    """
+    # ── Revenue & Net Profit CAGR from profit_and_loss ────────
+    pl_rows = conn.execute("""
         SELECT period_end, sales, net_profit
-        FROM annual_results
-        WHERE symbol = ?
+        FROM profit_and_loss
+        WHERE symbol = ? AND period_type = 'annual'
         ORDER BY period_end DESC
     """, (symbol,)).fetchall()
 
-    if len(ar_rows) < 4:
-        print(f"  ⚠️  reconcile growth_metrics: not enough annual_results rows for {symbol}")
+    # Fallback: annual_results
+    if len(pl_rows) < 4:
+        pl_rows = conn.execute("""
+            SELECT period_end, sales, net_profit
+            FROM annual_results
+            WHERE symbol = ?
+            ORDER BY period_end DESC
+        """, (symbol,)).fetchall()
+
+    if len(pl_rows) < 4:
+        print(f"  ⚠️  reconcile growth_metrics: not enough data for {symbol}")
         return
 
     def cagr(end, start, years):
-        if not end or not start or start <= 0:
+        e, s = _f(end), _f(start)
+        if e is None or s is None or s <= 0:
             return None
-        return round(((end / start) ** (1 / years) - 1) * 100, 2)
+        return round(((e / s) ** (1 / years) - 1) * 100, 2)
 
-    sales  = [_f(r[1]) for r in ar_rows]
-    profit = [_f(r[2]) for r in ar_rows]
+    sales  = [r[1] for r in pl_rows]
+    profit = [r[2] for r in pl_rows]
 
     rev_cagr  = cagr(sales[0],  sales[3],  3)
     prof_cagr = cagr(profit[0], profit[3], 3)
 
-    # 2. EBITDA CAGR from income_statement (annual)
-    is_rows = conn.execute("""
-        SELECT ebitda, diluted_eps
-        FROM income_statement
+    # ── EBITDA & EPS CAGR — derived from profit_and_loss ──────
+    # EBITDA ≈ operating_profit + other_income + depreciation
+    pl_full = conn.execute("""
+        SELECT operating_profit, other_income, depreciation, eps
+        FROM profit_and_loss
         WHERE symbol = ? AND period_type = 'annual'
         ORDER BY period_end DESC
         LIMIT 4
     """, (symbol,)).fetchall()
 
-    ebitda_vals = [_f(r[0]) for r in is_rows if r[0] is not None]
-    eps_vals    = [_f(r[1]) for r in is_rows if r[1] is not None]
+    ebitda_vals, eps_vals = [], []
+    for r in pl_full:
+        op, oi, dep, eps_v = map(_f, r)
+        if op is not None:
+            ebitda = (op or 0) + (oi or 0) + (dep or 0)
+            ebitda_vals.append(ebitda)
+        if eps_v is not None:
+            eps_vals.append(eps_v)
 
     ebitda_cagr = cagr(ebitda_vals[0], ebitda_vals[3], 3) if len(ebitda_vals) >= 4 else None
-    eps_cagr    = cagr(eps_vals[0], eps_vals[3], 3) if len(eps_vals) >= 4 else None
+    eps_cagr    = cagr(eps_vals[0],    eps_vals[3],    3) if len(eps_vals)    >= 4 else None
 
-    # 3. FCF CAGR from cash_flow (annual)
+    # ── FCF CAGR from cash_flow ────────────────────────────────
     cf_rows = conn.execute("""
         SELECT free_cash_flow
         FROM cash_flow
@@ -278,10 +283,10 @@ def reconcile_growth_metrics(symbol: str, conn):
         LIMIT 4
     """, (symbol,)).fetchall()
 
-    fcf_vals = [_f(r[0]) for r in cf_rows if r[0] is not None]
-    fcf_cagr = cagr(fcf_vals[0], fcf_vals[3], 3) if len(fcf_vals) >= 4 else None
+    fcf_vals = [_f(r[0]) for r in cf_rows if _f(r[0]) is not None]
+    fcf_cagr  = cagr(fcf_vals[0], fcf_vals[3], 3) if len(fcf_vals) >= 4 else None
 
-    # 4. Update the row (the one created by growth_loader today)
+    # ── Update growth_metrics ──────────────────────────────────
     conn.execute("""
         UPDATE growth_metrics SET
             revenue_cagr_3y    = COALESCE(revenue_cagr_3y, ?),
@@ -289,16 +294,22 @@ def reconcile_growth_metrics(symbol: str, conn):
             ebitda_cagr_3y     = COALESCE(ebitda_cagr_3y, ?),
             eps_cagr_3y        = COALESCE(eps_cagr_3y, ?),
             fcf_cagr_3y        = COALESCE(fcf_cagr_3y, ?)
-        WHERE symbol = ? AND as_of_date = (SELECT MAX(as_of_date) FROM growth_metrics WHERE symbol = ?)
+        WHERE symbol = ?
+          AND as_of_date = (SELECT MAX(as_of_date) FROM growth_metrics WHERE symbol = ?)
     """, (rev_cagr, prof_cagr, ebitda_cagr, eps_cagr, fcf_cagr, symbol, symbol))
 
     conn.commit()
-    print(f"  ✅ reconcile growth_metrics: {symbol} (rev={rev_cagr}, prof={prof_cagr}, ebitda={ebitda_cagr}, eps={eps_cagr}, fcf={fcf_cagr})")
+    print(
+        f"  ✅ reconcile growth_metrics: {symbol} "
+        f"(rev={rev_cagr}, prof={prof_cagr}, ebitda={ebitda_cagr}, "
+        f"eps={eps_cagr}, fcf={fcf_cagr})"
+    )
+
+
 # ─────────────────────────────────────────────
 # 6. FUNDAMENTALS
 # ─────────────────────────────────────────────
 def reconcile_fundamentals(symbol: str, conn):
-
     bs = conn.execute("""
         SELECT total_assets, total_equity, borrowings, cash_equivalents
         FROM balance_sheet
@@ -310,7 +321,6 @@ def reconcile_fundamentals(symbol: str, conn):
         return
 
     ta, te, debt, cash = map(_f, bs)
-
     de_ratio = _div(debt, te)
 
     conn.execute("""
@@ -328,11 +338,10 @@ def reconcile_fundamentals(symbol: str, conn):
 # ─────────────────────────────────────────────
 def run_reconciliation(symbol: str):
     conn = get_connection()
-
     try:
+        reconcile_profit_and_loss(symbol, conn)       # ← replaces income_statement
         reconcile_balance_sheet(symbol, conn)
         reconcile_cash_flow(symbol, conn)
-        reconcile_income_statement(symbol, conn)
         reconcile_annual_cashflow_derived(symbol, conn)
         reconcile_growth_metrics(symbol, conn)
         reconcile_fundamentals(symbol, conn)
