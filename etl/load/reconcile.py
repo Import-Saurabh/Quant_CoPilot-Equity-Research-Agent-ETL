@@ -1,12 +1,11 @@
 """
-etl/load/reconcile.py  v4.0
+etl/load/reconcile.py  v4.2
 ────────────────────────────────────────────────────────────────
-Changes vs v3.0:
-  • reconcile_income_statement() REMOVED — income_statement table gone.
-  • reconcile_profit_and_loss() ADDED — targets the new profit_and_loss
-    table; computes completeness_pct / missing_fields_json and derives
-    net_debt where possible.
-  • run_reconciliation() updated accordingly.
+Changes vs v4.1:
+  • Removed gross_npa_pct and net_npa_pct from reconcile_profit_and_loss()
+    entirely — these columns are not present in the profit_and_loss schema.
+  • FINANCIAL_FIELDS now contains only financing_profit and
+    financing_margin_pct; the is_financial_row check uses just these two.
 ────────────────────────────────────────────────────────────────
 """
 
@@ -70,29 +69,39 @@ def reconcile_profit_and_loss(symbol: str, conn):
         value is NULL (some Screener pages omit it).
       • Compute completeness_pct and missing_fields_json over the
         core numeric columns.
+      • NBFC/Bank columns (financing_profit, financing_margin_pct) are
+        excluded from the completeness penalty when the company is
+        non-financial (i.e. both columns are 0 or NULL for that row).
     """
     _ensure_cols(conn, "profit_and_loss", [
-        ("completeness_pct",    "REAL"),
-        ("missing_fields_json", "TEXT"),
+        ("completeness_pct",     "REAL"),
+        ("missing_fields_json",  "TEXT"),
+        ("financing_profit",     "REAL"),
+        ("financing_margin_pct", "REAL"),
     ])
     conn.commit()
 
-    # Core columns we care about for completeness scoring
+    # Core columns we always score for completeness
     CORE_FIELDS = [
         "sales", "expenses", "operating_profit", "opm_pct",
         "other_income", "interest", "depreciation",
         "profit_before_tax", "tax_pct", "net_profit", "eps",
     ]
+    # Additional columns scored only for financial companies
+    FINANCIAL_FIELDS = [
+        "financing_profit", "financing_margin_pct",
+    ]
+    ALL_FIELDS = CORE_FIELDS + FINANCIAL_FIELDS
 
     rows = conn.execute(f"""
-        SELECT rowid, {', '.join(CORE_FIELDS)}
+        SELECT rowid, {', '.join(ALL_FIELDS)}
         FROM profit_and_loss
         WHERE symbol = ?
     """, (symbol,)).fetchall()
 
     for r in rows:
         rowid    = r[0]
-        vals     = dict(zip(CORE_FIELDS, r[1:]))
+        vals     = dict(zip(ALL_FIELDS, r[1:]))
         floats   = {k: _f(v) for k, v in vals.items()}
 
         # Derive opm_pct if missing
@@ -104,7 +113,15 @@ def reconcile_profit_and_loss(symbol: str, conn):
                 derived_opm = round((op / sales) * 100, 2)
             floats["opm_pct"] = derived_opm
 
-        comp, missing = _completeness(floats)
+        # Determine if this row belongs to a financial company:
+        # either financing field is non-zero / non-null → financial
+        is_financial_row = any(
+            floats.get(f) not in (None, 0.0)
+            for f in FINANCIAL_FIELDS
+        )
+
+        scored_fields = {k: floats[k] for k in (CORE_FIELDS + (FINANCIAL_FIELDS if is_financial_row else []))}
+        comp, missing = _completeness(scored_fields)
 
         conn.execute("""
             UPDATE profit_and_loss SET

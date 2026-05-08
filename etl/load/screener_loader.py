@@ -1,11 +1,11 @@
 """
-etl/load/screener_loader.py  v5.6
+etl/load/screener_loader.py  v5.9
 ────────────────────────────────────────────────────────────────
-Changes vs v5.5:
-  FIX – raw_details_json no longer stores total/derived fields
-        (\"Operating Activity > Total\", \"Net Cash Flow\", \"Capex\", etc.).
-        Only the actual sub‑category line items are saved.
-  FIX – sub‑labels that match known total patterns are skipped.
+Changes vs v5.8:
+  SCHEMA CHANGE — gross_npa_pct / net_npa_pct are NOW ONLY stored
+  in quarterly_results. Removed from annual_results entirely.
+  quarterly_results retains all 4 NBFC columns unchanged.
+  _FINANCIAL_COLS for annual_results now only has financing columns.
 ────────────────────────────────────────────────────────────────
 """
 
@@ -19,7 +19,6 @@ from database.db import get_connection
 from database.validator import (validate_before_insert, compute_completeness,
                                  log_data_quality)
 
-# ── HTTP helpers for schedules API (cashflow sub-items) ──────────────────────
 import time as _time
 try:
     import httpx as _httpx
@@ -40,7 +39,6 @@ _SCR_HEADERS = {
 
 
 def _scr_get_json(url: str, referer: str = "", retries: int = 3) -> Optional[dict]:
-    """GET a Screener API URL, return parsed JSON dict or None."""
     headers = dict(_SCR_HEADERS)
     if referer:
         headers["Referer"] = referer
@@ -54,7 +52,7 @@ def _scr_get_json(url: str, referer: str = "", retries: int = 3) -> Optional[dic
                 data = r.json()
                 if isinstance(data, dict) and data:
                     return data
-                print(f"  warn  cf_schedules: empty response (dict but no keys) — {url}")
+                print(f"  warn  cf_schedules: empty response — {url}")
                 return None
             print(f"  warn  cf_schedules: HTTP {r.status_code} — {url}")
         except Exception as e:
@@ -129,6 +127,14 @@ def _row(df: pd.DataFrame, *patterns) -> Optional[pd.Series]:
     return None
 
 
+def _first_row(df: pd.DataFrame, *patterns) -> Optional[pd.Series]:
+    for p in patterns:
+        result = _row(df, p)
+        if result is not None:
+            return result
+    return None
+
+
 def _safe_float(v) -> Optional[float]:
     if v is None:
         return None
@@ -150,9 +156,7 @@ _BS_COMPLETENESS_FIELDS = [
     "net_debt",
 ]
 
-# ── ALL expected Screener BS row labels → DB column name ─────
 _BS_EXPECTED_ROWS = {
-    # Liabilities
     "Equity Capital":          "equity_capital",
     "Reserves":                "reserves",
     "Borrowings":              "borrowings",
@@ -167,7 +171,6 @@ _BS_EXPECTED_ROWS = {
     "Advance from Customers":  "advance_from_customers",
     "Other liability items":   "other_liability_items",
     "Total Liabilities":       "total_liabilities",
-    # Assets
     "Fixed Assets":            "fixed_assets",
     "CWIP":                    "cwip",
     "Investments":             "investments",
@@ -180,10 +183,8 @@ _BS_EXPECTED_ROWS = {
     "Total Assets":            "total_assets",
 }
 
-# ── Balance sheet schema migration ───────────────────────────
 
 def _ensure_bs_columns(conn):
-    """Add any missing columns to balance_sheet (idempotent)."""
     new_cols = [
         ("lt_borrowings",          "REAL"),
         ("st_borrowings",          "REAL"),
@@ -225,8 +226,53 @@ def _ensure_bs_columns(conn):
         print(f"  db-migrate balance_sheet: added columns → {', '.join(added)}")
 
 
+# ── NBFC / Bank column migration ─────────────────────────────
+# quarterly_results: all 4 NBFC columns
+_QUARTERLY_FINANCIAL_COLS = [
+    ("gross_npa_pct",        "REAL"),
+    ("net_npa_pct",          "REAL"),
+    ("financing_profit",     "REAL"),
+    ("financing_margin_pct", "REAL"),
+]
+
+# annual_results: financing columns ONLY — no gross/net NPA
+_ANNUAL_FINANCIAL_COLS = [
+    ("financing_profit",     "REAL"),
+    ("financing_margin_pct", "REAL"),
+]
+
+
+def _ensure_quarterly_financial_cols(conn):
+    """Idempotently add all 4 NBFC columns to quarterly_results."""
+    added = []
+    for col_name, col_type in _QUARTERLY_FINANCIAL_COLS:
+        try:
+            conn.execute(
+                f"ALTER TABLE quarterly_results ADD COLUMN {col_name} {col_type} DEFAULT 0"
+            )
+            added.append(col_name)
+        except Exception:
+            pass
+    if added:
+        print(f"  db-migrate quarterly_results: added NBFC columns → {', '.join(added)}")
+
+
+def _ensure_annual_financial_cols(conn):
+    """Idempotently add only financing columns to annual_results (no NPA cols)."""
+    added = []
+    for col_name, col_type in _ANNUAL_FINANCIAL_COLS:
+        try:
+            conn.execute(
+                f"ALTER TABLE annual_results ADD COLUMN {col_name} {col_type} DEFAULT 0"
+            )
+            added.append(col_name)
+        except Exception:
+            pass
+    if added:
+        print(f"  db-migrate annual_results: added NBFC columns → {', '.join(added)}")
+
+
 def _bs_completeness(conn, symbol: str, period_end: str, period_type: str):
-    """Recompute completeness for a BS row."""
     for col_name, col_type in [("completeness_pct", "REAL"), ("missing_fields_json", "TEXT")]:
         try:
             conn.execute(f"ALTER TABLE balance_sheet ADD COLUMN {col_name} {col_type}")
@@ -369,7 +415,11 @@ def load_quarterly_results(df: pd.DataFrame, symbol: str):
     if not _has_data(df):
         print("  warn  quarterly_results: no data"); return
 
-    sales_r   = _row(df, "Sales")
+    conn = get_connection()
+    _ensure_quarterly_financial_cols(conn)   # all 4 NBFC cols including NPA
+    conn.commit()
+
+    sales_r   = _first_row(df, "Sales", "Revenue", "Interest Earned", "Revenue from operations")
     exp_r     = _row(df, "Expenses")
     op_r      = _row(df, "Operating Profit")
     opm_r     = _row(df, "OPM %")
@@ -381,7 +431,21 @@ def load_quarterly_results(df: pd.DataFrame, symbol: str):
     np_r      = _row(df, "Net Profit")
     eps_r     = _row(df, "EPS in Rs")
 
-    conn = get_connection()
+    # NBFC / Bank-specific rows — all 4 kept for quarterly
+    gnpa_r    = _row(df, "Gross NPA %")
+    nnpa_r    = _row(df, "Net NPA %")
+    finpro_r  = _row(df, "Financing Profit")
+    finmgn_r  = _row(df, "Financing Margin %")
+
+    if op_r is None and finpro_r is not None:
+        op_r = finpro_r
+    if opm_r is None and finmgn_r is not None:
+        opm_r = finmgn_r
+
+    is_financial = any(r is not None for r in (gnpa_r, nnpa_r, finpro_r, finmgn_r))
+    if is_financial:
+        print(f"  info  quarterly_results: NBFC/Bank rows detected for {symbol}")
+
     count = 0
 
     for col in df.columns:
@@ -390,8 +454,17 @@ def load_quarterly_results(df: pd.DataFrame, symbol: str):
             continue
 
         sales = _v(sales_r, col)
-        if sales is None:
+        fin_profit = _v(finpro_r, col) if finpro_r is not None else None
+        if sales is None and fin_profit is None:
             continue
+
+        # All 4 NBFC cols stored in quarterly (NPA only meaningful for financials)
+        gross_npa        = _v(gnpa_r,   col) if is_financial else 0.0
+        net_npa          = _v(nnpa_r,   col) if is_financial else 0.0
+        financing_profit = _v(finpro_r, col) if is_financial else 0.0
+        financing_margin = _v(finmgn_r, col) if is_financial else 0.0
+
+        row_sales = sales if sales is not None else fin_profit
 
         conn.execute("""
             INSERT INTO quarterly_results (
@@ -399,34 +472,42 @@ def load_quarterly_results(df: pd.DataFrame, symbol: str):
                 sales, expenses, operating_profit, opm_pct,
                 other_income, interest, depreciation,
                 profit_before_tax, tax_pct, net_profit, eps,
+                gross_npa_pct, net_npa_pct,
+                financing_profit, financing_margin_pct,
                 data_source
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(symbol, period_end) DO UPDATE SET
-                sales             = excluded.sales,
-                expenses          = excluded.expenses,
-                operating_profit  = excluded.operating_profit,
-                opm_pct           = excluded.opm_pct,
-                other_income      = excluded.other_income,
-                interest          = excluded.interest,
-                depreciation      = excluded.depreciation,
-                profit_before_tax = excluded.profit_before_tax,
-                tax_pct           = excluded.tax_pct,
-                net_profit        = excluded.net_profit,
-                eps               = excluded.eps,
-                data_source       = 'screener'
+                sales                = excluded.sales,
+                expenses             = excluded.expenses,
+                operating_profit     = excluded.operating_profit,
+                opm_pct              = excluded.opm_pct,
+                other_income         = excluded.other_income,
+                interest             = excluded.interest,
+                depreciation         = excluded.depreciation,
+                profit_before_tax    = excluded.profit_before_tax,
+                tax_pct              = excluded.tax_pct,
+                net_profit           = excluded.net_profit,
+                eps                  = excluded.eps,
+                gross_npa_pct        = excluded.gross_npa_pct,
+                net_npa_pct          = excluded.net_npa_pct,
+                financing_profit     = excluded.financing_profit,
+                financing_margin_pct = excluded.financing_margin_pct,
+                data_source          = 'screener'
         """, (
             symbol, period_end,
-            sales,
+            row_sales,
             _v(exp_r, col), _v(op_r, col), _v(opm_r, col),
             _v(oth_r, col), _v(int_r, col), _v(dep_r, col),
             _v(pbt_r, col), _v(tax_r, col), _v(np_r,  col),
             _v(eps_r, col),
+            gross_npa, net_npa, financing_profit, financing_margin,
             "screener",
         ))
         count += 1
 
     conn.commit(); conn.close()
-    print(f"  ok  quarterly_results: {count} rows")
+    print(f"  ok  quarterly_results: {count} rows"
+          + (" [NBFC/Bank]" if is_financial else ""))
 
 
 # ── Annual results ────────────────────────────────────────────
@@ -435,7 +516,11 @@ def load_annual_results(df: pd.DataFrame, symbol: str):
     if not _has_data(df):
         print("  warn  annual_results: no data"); return
 
-    sales_r   = _row(df, "Sales")
+    conn = get_connection()
+    _ensure_annual_financial_cols(conn)   # financing cols ONLY — no NPA
+    conn.commit()
+
+    sales_r   = _first_row(df, "Sales", "Revenue", "Interest Earned", "Revenue from operations")
     exp_r     = _row(df, "Expenses")
     op_r      = _row(df, "Operating Profit")
     opm_r     = _row(df, "OPM %")
@@ -448,7 +533,19 @@ def load_annual_results(df: pd.DataFrame, symbol: str):
     eps_r     = _row(df, "EPS in Rs")
     div_r     = _row(df, "Dividend Payout %")
 
-    conn = get_connection()
+    # Annual: financing rows only — NPA cols intentionally excluded
+    finpro_r  = _row(df, "Financing Profit")
+    finmgn_r  = _row(df, "Financing Margin %")
+
+    if op_r is None and finpro_r is not None:
+        op_r = finpro_r
+    if opm_r is None and finmgn_r is not None:
+        opm_r = finmgn_r
+
+    is_financial = any(r is not None for r in (finpro_r, finmgn_r))
+    if is_financial:
+        print(f"  info  annual_results: NBFC/Bank rows detected for {symbol}")
+
     count = 0
 
     for col in df.columns:
@@ -457,8 +554,14 @@ def load_annual_results(df: pd.DataFrame, symbol: str):
             continue
 
         sales = _v(sales_r, col)
-        if sales is None:
+        fin_profit = _v(finpro_r, col) if finpro_r is not None else None
+        if sales is None and fin_profit is None:
             continue
+
+        financing_profit = _v(finpro_r, col) if is_financial else 0.0
+        financing_margin = _v(finmgn_r, col) if is_financial else 0.0
+
+        row_sales = sales if sales is not None else fin_profit
 
         conn.execute("""
             INSERT INTO annual_results (
@@ -466,36 +569,42 @@ def load_annual_results(df: pd.DataFrame, symbol: str):
                 sales, expenses, operating_profit, opm_pct,
                 other_income, interest, depreciation,
                 profit_before_tax, tax_pct, net_profit, eps,
-                dividend_payout_pct, data_source
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                dividend_payout_pct,
+                financing_profit, financing_margin_pct,
+                data_source
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(symbol, period_end) DO UPDATE SET
-                sales               = excluded.sales,
-                expenses            = excluded.expenses,
-                operating_profit    = excluded.operating_profit,
-                opm_pct             = excluded.opm_pct,
-                other_income        = excluded.other_income,
-                interest            = excluded.interest,
-                depreciation        = excluded.depreciation,
-                profit_before_tax   = excluded.profit_before_tax,
-                tax_pct             = excluded.tax_pct,
-                net_profit          = excluded.net_profit,
-                eps                 = excluded.eps,
-                dividend_payout_pct = excluded.dividend_payout_pct,
-                data_source         = 'screener'
+                sales                = excluded.sales,
+                expenses             = excluded.expenses,
+                operating_profit     = excluded.operating_profit,
+                opm_pct              = excluded.opm_pct,
+                other_income         = excluded.other_income,
+                interest             = excluded.interest,
+                depreciation         = excluded.depreciation,
+                profit_before_tax    = excluded.profit_before_tax,
+                tax_pct              = excluded.tax_pct,
+                net_profit           = excluded.net_profit,
+                eps                  = excluded.eps,
+                dividend_payout_pct  = excluded.dividend_payout_pct,
+                financing_profit     = excluded.financing_profit,
+                financing_margin_pct = excluded.financing_margin_pct,
+                data_source          = 'screener'
         """, (
             symbol, period_end,
-            sales,
+            row_sales,
             _v(exp_r, col), _v(op_r, col), _v(opm_r, col),
             _v(oth_r, col), _v(int_r, col), _v(dep_r, col),
             _v(pbt_r, col), _v(tax_r, col), _v(np_r,  col),
             _v(eps_r, col), _v(div_r, col),
+            financing_profit, financing_margin,
             "screener",
         ))
         count += 1
 
     conn.commit(); conn.close()
     ttm_flag = " (incl TTM if present)" if count > 10 else ""
-    print(f"  ok  annual_results: {count} rows{ttm_flag}")
+    print(f"  ok  annual_results: {count} rows{ttm_flag}"
+          + (" [NBFC/Bank]" if is_financial else ""))
 
 
 # ── BS diagnostic ─────────────────────────────────────────────
@@ -546,7 +655,6 @@ def load_balance_from_screener(df: pd.DataFrame, symbol: str):
 
     _print_bs_row_diagnostic(df)
 
-    # Liabilities side
     eq_r      = _row(df, "Equity Capital")
     res_r     = _row(df, "Reserves")
     bor_r     = _row(df, "Borrowings")
@@ -562,7 +670,6 @@ def load_balance_from_screener(df: pd.DataFrame, symbol: str):
     oliab_r   = _row(df, "Other liability items", "Other Liability Items")
     totl_r    = _row(df, "Total Liabilities")
 
-    # Assets side
     fix_r     = _row(df, "Fixed Assets", "Net Block")
     cwip_r    = _row(df, "CWIP", "Capital Work in Progress")
     inv_r     = _row(df, "Investments")
@@ -700,7 +807,7 @@ def load_balance_from_screener(df: pd.DataFrame, symbol: str):
     print(f"  ok  balance_sheet: {count} Screener rows upserted")
 
 
-# ── Cash flow schedule constants ─────────────────────────────────────────────
+# ── Cash flow schedule constants ──────────────────────────────
 
 _CF_SCHEDULE_PARENTS = [
     ("Operating Activity", "Cash+from+Operating+Activity"),
@@ -800,7 +907,6 @@ def _cf_lk(label) -> str:
 
 
 def _cf_is_total_label(label: str) -> bool:
-    """Return True if this label is a section-total row (not a component)."""
     lk = _cf_lk(label)
     if lk in _ALL_CF_TOTAL_LABELS:
         return True
@@ -811,35 +917,24 @@ def _cf_is_total_label(label: str) -> bool:
 
 
 def _cf_find_total(sub_items: dict, section: str) -> Optional[float]:
-    """
-    Find section total from sub-items dict.
-    Priority: exact match → soft match → sum of non-total items.
-    Never sums the total row itself.
-    """
-    # 1. Exact match
     for cand in _CF_TOTAL_LABELS.get(section, []):
         for lbl, val in sub_items.items():
             if _cf_lk(lbl) == cand:
                 v = _cf_clean(val)
                 if v is not None:
                     return v
-
-    # 2. Soft match
     for cand in _CF_TOTAL_LABELS.get(section, []):
         for lbl, val in sub_items.items():
             if cand in _cf_lk(lbl):
                 v = _cf_clean(val)
                 if v is not None:
                     return v
-
-    # 3. Sum components only (exclude any total-row labels)
     components = [
         _cf_clean(v) for lbl, v in sub_items.items()
         if not _cf_is_total_label(lbl) and _cf_clean(v) is not None
     ]
     if components:
         return round(sum(components), 2)
-
     return None
 
 
@@ -852,10 +947,6 @@ def _cf_find_capex(inv_sub: dict) -> Optional[float]:
 
 
 def _fetch_cf_schedules(company_id: int, consolidated: bool, symbol_nse: str) -> dict:
-    """
-    Fetch Operating/Investing/Financing sub-items from Screener schedules API.
-    Returns { section_name: { period_label: { sub_label: float } } }
-    """
     result = {}
     cons = "" if consolidated else "false"
     referer = (
@@ -883,19 +974,15 @@ def _fetch_cf_schedules(company_id: int, consolidated: bool, symbol_nse: str) ->
         for sub_label, period_values in raw.items():
             sub_key = str(sub_label).strip()
             if not isinstance(period_values, dict):
-                print(f"  warn  cf_schedule [{section_name}]: "
-                      f"sub_label '{sub_key}' has non-dict value — skipped")
                 continue
             raw_sub_labels.append(sub_key)
-
             for period_label, value in period_values.items():
                 period_key = str(period_label).strip()
                 if not _parse_period(period_key):
                     continue
                 if period_key not in parsed:
                     parsed[period_key] = {}
-                cleaned = _cf_clean(value)
-                parsed[period_key][sub_key] = cleaned
+                parsed[period_key][sub_key] = _cf_clean(value)
 
         result[section_name] = parsed
 
@@ -920,24 +1007,11 @@ def _fetch_cf_schedules(company_id: int, consolidated: bool, symbol_nse: str) ->
     return result
 
 
-# ── Cash flow from Screener (main loader) ─────────────────────
+# ── Cash flow loader ──────────────────────────────────────────
 
 def load_cashflow_from_screener(df: pd.DataFrame, symbol: str,
                                  company_id: Optional[int] = None,
                                  consolidated: bool = True):
-    """
-    Load Screener cash flow data into cash_flow table.
-
-    Phase 1 — top-level HTML table (df): cfo / cfi / cff / ncf totals.
-    Phase 2 — schedules API: sub-category line items stored in
-              raw_details_json as "Section > Sub Label" keys.
-              capex from Investing > Fixed assets purchased.
-              free_cash_flow derived as cfo + capex.
-              net_cash_flow derived as cfo + cfi + cff when missing.
-
-    v5.6: raw_details_json only contains the actual sub-items,
-          no totals or derived fields.
-    """
     if not _has_data(df):
         print("  warn  cash_flow screener: no data")
         return
@@ -964,15 +1038,6 @@ def load_cashflow_from_screener(df: pd.DataFrame, symbol: str,
     else:
         print("  warn  cf_schedules: no company_id — sub-items will be empty")
 
-    for sec_name, sec_data in schedules.items():
-        sample_period = next(iter(sec_data), None)
-        if sample_period:
-            sub_labels = list(sec_data[sample_period].keys())
-            print(f"  cf_schedule [{sec_name}] sample period '{sample_period}': "
-                  f"{len(sub_labels)} sub-labels → {sub_labels[:8]}{'...' if len(sub_labels) > 8 else ''}")
-        else:
-            print(f"  warn  cf_schedule [{sec_name}]: 0 periods parsed")
-
     conn  = get_connection()
     count = 0
     total_sub_items_written = 0
@@ -993,16 +1058,6 @@ def load_cashflow_from_screener(df: pd.DataFrame, symbol: str,
         inv_items = schedules.get("Investing Activity",  {}).get(col_str, {})
         fin_items = schedules.get("Financing Activity",  {}).get(col_str, {})
 
-        if count < 3:
-            print(f"  cf_period '{col_str}': "
-                  f"ops={len(ops_items)} inv={len(inv_items)} fin={len(fin_items)} sub-items")
-            if not ops_items and not inv_items and not fin_items:
-                all_period_keys = set()
-                for sec_data in schedules.values():
-                    all_period_keys.update(sec_data.keys())
-                print(f"  debug  available period keys in schedules: "
-                      f"{sorted(all_period_keys)[:10]}")
-
         if cfo is None:
             cfo = _cf_find_total(ops_items, "Operating Activity")
         if cfi is None:
@@ -1011,7 +1066,6 @@ def load_cashflow_from_screener(df: pd.DataFrame, symbol: str,
             cff = _cf_find_total(fin_items, "Financing Activity")
 
         capex = _cf_find_capex(inv_items)
-
         screener_fcf = round(cfo + capex, 2) if (cfo is not None and capex is not None) else fcf
         if ncf is None and cfo is not None and cfi is not None and cff is not None:
             ncf = round(cfo + cfi + cff, 2)
@@ -1020,23 +1074,19 @@ def load_cashflow_from_screener(df: pd.DataFrame, symbol: str,
             print(f"  skip  cf[{col_str}]: cfo and fcf both None — no usable data")
             continue
 
-        # ── Build raw_details_json (ONLY sub‑items) ────────────────────────
         raw_detail: dict = {}
-
         for sec_name, sub_items in [
             ("Operating Activity", ops_items),
             ("Investing Activity",  inv_items),
             ("Financing Activity",  fin_items),
         ]:
             for sub_label, val in sub_items.items():
-                # skip section‑total rows, we don't want them in raw details
                 if _cf_is_total_label(sub_label):
                     continue
                 raw_detail[f"{sec_name} > {sub_label}"] = val
 
         sub_item_count = len(raw_detail)
         total_sub_items_written += sub_item_count
-
         raw_json = json.dumps(raw_detail, default=str) if raw_detail else None
 
         conn.execute("""
@@ -1064,7 +1114,6 @@ def load_cashflow_from_screener(df: pd.DataFrame, symbol: str,
 
     conn.commit()
 
-    # ── Diagnostic (unchanged, shows sub‑items only) ─────────────────
     latest = conn.execute("""
         SELECT cfo, cfi, cff, capex, free_cash_flow, net_cash_flow, raw_details_json
         FROM cash_flow WHERE symbol = ?
@@ -1073,15 +1122,12 @@ def load_cashflow_from_screener(df: pd.DataFrame, symbol: str,
 
     print()
     print("  ── Cash Flow Row Diagnostic ──────────────────────────────────────────────")
-    print(f"  {'Screener Label':<35} {'DB Column':<28} {'Found?'}")
-    print(f"  {'-'*35} {'-'*28} {'-'*6}")
-
-    def _diag(label: str, db_col: str, val) -> None:
-        status = "✅ yes" if val is not None else "❌ NULL"
-        print(f"  {label:<35} {db_col:<28} {status}")
-
     if latest:
         s_cfo, s_cfi, s_cff, s_capex, s_fcf, s_ncf, s_raw = latest
+
+        def _diag(label, db_col, val):
+            status = "✅ yes" if val is not None else "❌ NULL"
+            print(f"  {label:<35} {db_col:<28} {status}")
 
         _diag("Cash from Operating Activity", "cfo",            s_cfo)
         _diag("Cash from Investing Activity", "cfi",            s_cfi)
@@ -1096,29 +1142,10 @@ def load_cashflow_from_screener(df: pd.DataFrame, symbol: str,
             try:
                 raw = json.loads(s_raw)
                 all_raw_keys = list(raw.keys())
-
-                print(f"\n  ── Sub-item checks (raw_details_json) ──────────────────────────────────")
-                for section_name, expected_subs in _CF_EXPECTED_SUB_LABELS.items():
-                    for exp_sub in expected_subs:
-                        full_key = f"{section_name} > {exp_sub}"
-                        matched_key = None
-                        matched_val = None
-                        for k, v in raw.items():
-                            if k == full_key or (
-                                k.startswith(section_name + " > ") and
-                                exp_sub.lower() in k.lower()
-                            ):
-                                matched_key = k
-                                matched_val = v
-                                break
-                        status = f"✅ {matched_val}" if matched_val is not None else "❌ NULL"
-                        print(f"  {full_key[:65]:<65} {status}")
-
                 sub_count = len(all_raw_keys)
             except Exception as e:
                 print(f"  warn  cf diagnostic JSON parse error: {e}")
 
-        print(f"\n  ── Summary ──────────────────────────────────────────────────────────────")
         core_null = [f for f, v in [
             ("cfo", s_cfo), ("cfi", s_cfi), ("cff", s_cff),
             ("capex", s_capex), ("free_cash_flow", s_fcf), ("net_cash_flow", s_ncf),
@@ -1128,20 +1155,15 @@ def load_cashflow_from_screener(df: pd.DataFrame, symbol: str,
         else:
             print(f"  ✅ All 6 core cash flow fields populated (latest period)")
         print(f"  📦 Sub-items stored in raw_details_json: {sub_count}")
-        print(f"  📝 All raw_details keys ({len(all_raw_keys)}): {all_raw_keys}")
     else:
         print("  ⚠️  No cash_flow rows found for diagnostic")
 
     print("  ── End Cash Flow Diagnostic ──────────────────────────────────────────────")
-    print()
-
     conn.close()
-    print(f"  ok  cash_flow: {count} Screener rows upserted (periods with data) | "
+    print(f"  ok  cash_flow: {count} rows upserted | "
           f"total sub-items written: {total_sub_items_written}")
 
 
-# ── Balance sheet schedules backfill (unchanged) ──────────────────────────
-# (rest of the file remains identical)
 # ── Balance sheet schedules backfill ──────────────────────────
 
 _SCHEDULE_COL_MAP = {
@@ -1248,8 +1270,7 @@ def load_balance_schedules_backfill(schedules: dict, symbol: str):
     conn.close()
 
     _backfill_net_debt(symbol)
-    print(f"  ok  bs_backfill: {backfilled} sub-cells backfilled for {symbol} "
-          f"(COALESCE — existing data preserved)")
+    print(f"  ok  bs_backfill: {backfilled} sub-cells backfilled for {symbol}")
 
 def _backfill_net_debt(symbol: str):
     conn = get_connection()
@@ -1279,10 +1300,6 @@ def _backfill_net_debt(symbol: str):
 # ── Growth metrics ────────────────────────────────────────────
 
 def _ensure_growth_metrics_unique(conn) -> None:
-    """
-    Create UNIQUE INDEX on growth_metrics(symbol, as_of_date) if it doesn't
-    exist yet. Safe to call repeatedly — idempotent.
-    """
     try:
         conn.execute("""
             CREATE UNIQUE INDEX IF NOT EXISTS
@@ -1373,7 +1390,7 @@ def load_growth_from_screener(df: pd.DataFrame, symbol: str):
     ))
     conn.commit(); conn.close()
 
-    status = "ok" if scr_available else "warn — still empty (check debug cols/rows above)"
+    status = "ok" if scr_available else "warn — still empty"
     print(f"  {status}  growth_metrics: sales_3y={sales_3y} profit_3y={profit_3y} "
           f"stock_10y={stock_10y} roe_last={roe_last} available={scr_available}")
 
@@ -1438,7 +1455,7 @@ def load_fundamentals_from_screener(ratios_df: pd.DataFrame, symbol: str):
     """, (symbol, today, dso, dio, dpo, ccc, wcd, roce, opm, div_payout, bv, "screener"))
 
     conn.commit(); conn.close()
-    print(f"  ok  fundamentals: Screener ratios merged | ROCE={roce} OPM={opm} WCD={wcd} "
+    print(f"  ok  fundamentals: ROCE={roce} OPM={opm} WCD={wcd} "
           f"DivPayout={div_payout} BookVal={bv}")
 
 

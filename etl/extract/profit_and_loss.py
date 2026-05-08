@@ -5,6 +5,14 @@ Fetches Profit & Loss data from Screener.in for any NSE ticker.
 Returns a clean DataFrame ready for profit_and_loss_loader.py.
 
 Replaces: statements.py (yfinance income logic removed entirely)
+
+v2: Added NBFC / Bank columns:
+    financing_profit, financing_margin_pct
+    Non-financial companies get 0 for these two columns.
+
+v3: Removed gross_npa_pct and net_npa_pct — these do not appear
+    in Screener's P&L section and have been dropped from the
+    profit_and_loss table.
 ────────────────────────────────────────────────────────────────
 """
 
@@ -24,19 +32,36 @@ _session.headers.update({
 })
 
 # ── Column name normalisation ──────────────────────────────────
+# Banks/NBFCs use "Revenue" or "Interest Earned" instead of "Sales",
+# and "Financing Profit" / "Financing Margin %" instead of
+# "Operating Profit" / "OPM %".  All aliases map to the same DB column
+# so the loader always receives clean column names regardless of company type.
+#
+# Note: "Gross NPA %" and "Net NPA %" have been removed — they appear
+# in the Quarters section only, not in Screener's P&L table.
 _COLUMN_MAPPING = {
-    "Sales":                "sales",
-    "Expenses":             "expenses",
-    "Operating Profit":     "operating_profit",
-    "OPM %":                "opm_pct",
-    "Other Income":         "other_income",
-    "Interest":             "interest",
-    "Depreciation":         "depreciation",
-    "Profit before tax":    "profit_before_tax",
-    "Tax %":                "tax_pct",
-    "Net Profit":           "net_profit",
-    "EPS in Rs":            "eps",
-    "Dividend Payout %":    "dividend_payout_pct",
+    # Standard companies
+    "Sales":                    "sales",
+    # NBFC / Bank alias for Sales
+    "Revenue":                  "sales",
+    "Interest Earned":          "sales",
+    "Revenue from operations":  "sales",
+    # Standard companies
+    "Expenses":                 "expenses",
+    "Operating Profit":         "operating_profit",
+    "OPM %":                    "opm_pct",
+    # NBFC / Bank aliases for Operating Profit / OPM %
+    "Financing Profit":         "financing_profit",
+    "Financing Margin %":       "financing_margin_pct",
+    # Common rows
+    "Other Income":             "other_income",
+    "Interest":                 "interest",
+    "Depreciation":             "depreciation",
+    "Profit before tax":        "profit_before_tax",
+    "Tax %":                    "tax_pct",
+    "Net Profit":               "net_profit",
+    "EPS in Rs":                "eps",
+    "Dividend Payout %":        "dividend_payout_pct",
 }
 
 
@@ -106,6 +131,23 @@ def _scrape_pl_table(ticker: str, consolidated: bool = True) -> pd.DataFrame | N
 
         # ── Normalise column names ─────────────────────────────
         df.rename(columns=_COLUMN_MAPPING, inplace=True)
+
+        # ── For NBFC / Banks: back-fill operating_profit and opm_pct
+        #    from financing_profit / financing_margin_pct so that the
+        #    common pipeline logic (completeness, growth CAGRs, etc.)
+        #    still has something useful in those columns.
+        if "financing_profit" in df.columns:
+            if "operating_profit" not in df.columns:
+                df["operating_profit"] = df["financing_profit"]
+            else:
+                mask = df["operating_profit"].isna() & df["financing_profit"].notna()
+                df.loc[mask, "operating_profit"] = df.loc[mask, "financing_profit"]
+        if "financing_margin_pct" in df.columns:
+            if "opm_pct" not in df.columns:
+                df["opm_pct"] = df["financing_margin_pct"]
+            else:
+                mask = df["opm_pct"].isna() & df["financing_margin_pct"].notna()
+                df.loc[mask, "opm_pct"] = df.loc[mask, "financing_margin_pct"]
 
         # ── Drop TTM row if present ────────────────────────────
         df = df[~df["period_end"].str.upper().isin(["TTM", ""])].copy()
