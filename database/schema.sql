@@ -123,6 +123,10 @@ CREATE TABLE IF NOT EXISTS quarterly_results (
     tax_pct             REAL,
     net_profit          REAL NOT NULL,
     eps                 REAL,
+    financing_profit    REAL,
+    financing_margin_pct REAL,
+    gross_npa_pct      REAL,
+    net_npa_pct        REAL,
 
     -- Data quality
     data_source              TEXT DEFAULT 'Screener.in',
@@ -469,6 +473,8 @@ CREATE TABLE IF NOT EXISTS profit_and_loss (
     net_profit REAL,
     eps REAL,
     dividend_payout_pct REAL,
+    financing_profit REAL,
+    financing_margin_pct REAL,
     is_interpolated INTEGER DEFAULT 0,
     data_source TEXT DEFAULT 'screener',
     completeness_pct REAL,
