@@ -1,16 +1,12 @@
 """
-etl/extract/fundamentals.py  v5.0
+etl/extract/fundamentals.py  v5.1
 ────────────────────────────────────────────────────────────────
-Changes vs v4:
-  • fundamentals_extract_patch.py REMOVED — all logic merged here
-  • Dropped: free_cash_flow, operating_cf, capex, net_income keys
-    (those live in cash_flow / income_statement tables)
-  • EV / EV_EBITDA / EV_Revenue always computed when mc+debt+cash
-    are available
-  • forward_pe pulled from info["forwardPE"] with sanity check
-  • earnings_growth_json always populated from annual income stmt
-  • All monetary values in Rs. Crores
-  • TTM figures use last 4 quarterly periods correctly
+Changes vs v5.0:
+  • BUG FIX — EV calculation: total_debt=None (debt-free tickers like
+    TCS) is now treated as 0 instead of blocking EV entirely.
+    EV = market_cap + (total_debt or 0) - (cash or 0)
+  • earnings_growth_json comment updated: missing value is now reliably
+    backfilled in fundamentals_loader v6.2 from profit_and_loss table.
 ────────────────────────────────────────────────────────────────
 """
 
@@ -347,8 +343,13 @@ def fetch_fundamentals(symbol: str) -> Dict[str, Any]:
     if cash is None:
         cash = _cr(info.get("totalCash"))
 
-    if mc is not None and total_debt is not None and cash is not None:
-        ev = round(mc + total_debt - cash, 2)
+    # BUG FIX: debt-free companies (e.g. TCS) report totalDebt=0 or None.
+    # Previously the None guard blocked EV from being computed at all.
+    # Treat None as 0 so EV = mc - cash is still populated.
+    _debt_for_ev = total_debt if total_debt is not None else 0.0
+    _cash_for_ev = cash if cash is not None else 0.0
+    if mc is not None:
+        ev = round(mc + _debt_for_ev - _cash_for_ev, 2)
         out["EV"] = ev
         if ebitda and ebitda > 0:
             out["EV/EBITDA"] = round(ev / ebitda, 2)
@@ -368,6 +369,9 @@ def fetch_fundamentals(symbol: str) -> Dict[str, Any]:
     egj = _build_earnings_growth_json(inc)
     if egj:
         out["earnings_growth_json"] = egj
+    # NOTE: If yfinance income_stmt is unavailable (common for .NS tickers),
+    # earnings_growth_json stays absent here and is backfilled in
+    # _backfill_nulls_from_db() Pass 2 from profit_and_loss.net_profit.
 
     # ── TTM EPS / TTM P/E (last 4 quarters) ──────────────────
     try:

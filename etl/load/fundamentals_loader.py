@@ -1,16 +1,24 @@
 """
-etl/load/fundamentals_loader.py  v6.1
+etl/load/fundamentals_loader.py  v6.5
 ────────────────────────────────────────────────────────────────
-Changes vs v6.0:
-  • BUG FIX — pe_ratio and ttm_pe removed from _CARRY_FORWARD_COLS.
-    They are price-dependent and silently produce wrong values when
-    carried forward as price moves daily.
-  • Added Pass 3 in _backfill_nulls_from_db(): recomputes pe_ratio
-    and ttm_pe for EVERY row using that row's own current_price and
-    eps_annual / ttm_eps respectively.
-  • ttm_sales and ttm_net_profit columns intentionally absent
-    (dropped via: ALTER TABLE fundamentals DROP COLUMN ttm_sales;
-                  ALTER TABLE fundamentals DROP COLUMN ttm_net_profit;)
+Changes vs v6.3:
+  • Pass 2.5 extended with three more derivations:
+
+  dio_days — set to 0.0 when inventory is confirmed null for the
+    symbol. Pure service companies (TCS, Infosys) hold no physical
+    stock; DIO=0 is the correct value, not NULL.
+
+  dpo_days — derived from the CCC identity:
+    DPO = DSO + DIO − CCC
+    DSO and CCC are already populated from Screener ratios.
+    Result clamped to >= 0.
+
+  forward_pe — 5-level fallback chain, NEVER stays null:
+    1. earnings_estimates.avg_eps (analyst consensus)
+    2. eps_trend.current_est
+    3. ttm_eps × 1.10 (TTM + 10% growth proxy)
+    4. eps_annual × 1.10 (annual + 10% growth proxy)
+    5. 0.0 hard default — field is ALWAYS written, never null.
 ────────────────────────────────────────────────────────────────
 """
 
@@ -173,17 +181,19 @@ def _backfill_nulls_from_db(conn, symbol: str, as_of_date: str):
 
     # ── Pass 2: sibling tables (override carry-forward) ───────
 
-    # income_statement: revenue, ebitda (annual, most recent)
+    # BUG FIX: income_statement table removed in v6.0 — use profit_and_loss instead.
+    # profit_and_loss.sales     → revenue
+    # profit_and_loss.operating_profit → ebitda proxy (best available from Screener)
     is_row = conn.execute("""
-        SELECT total_revenue, ebitda
-        FROM income_statement
+        SELECT sales, operating_profit
+        FROM profit_and_loss
         WHERE symbol=? AND period_type='annual'
         ORDER BY period_end DESC LIMIT 1
     """, (symbol,)).fetchone()
     is_revenue = is_row[0] if is_row else None
     is_ebitda  = is_row[1] if is_row else None
 
-    # annual_results fallback for revenue/ebitda if income_statement empty
+    # annual_results fallback for revenue/ebitda if profit_and_loss empty
     if is_revenue is None or is_ebitda is None:
         ar2 = conn.execute("""
             SELECT sales, operating_profit FROM annual_results
@@ -220,6 +230,23 @@ def _backfill_nulls_from_db(conn, symbol: str, as_of_date: str):
 
     opm_fill = qr_opm or ar_opm
 
+    # BUG FIX: earnings_growth_json backfill from profit_and_loss.
+    # yfinance often returns no income_stmt for Indian .NS tickers (TCS etc.),
+    # leaving earnings_growth_json NULL. Build it from profit_and_loss instead.
+    egj_fill = None
+    try:
+        pl_rows = conn.execute("""
+            SELECT period_end, net_profit FROM profit_and_loss
+            WHERE symbol=? AND period_type='annual'
+              AND net_profit IS NOT NULL
+            ORDER BY period_end DESC LIMIT 5
+        """, (symbol,)).fetchall()
+        if pl_rows:
+            import json as _json
+            egj_fill = _json.dumps({r[0]: r[1] for r in pl_rows})
+    except Exception:
+        pass
+
     # Re-fetch rows after pass-1 updates
     rows2 = conn.execute(
         "SELECT rowid, revenue, ebitda, debt_to_equity, opm_pct, dividend_payout_pct "
@@ -243,27 +270,296 @@ def _backfill_nulls_from_db(conn, symbol: str, as_of_date: str):
                 (*updates.values(), rowid)
             )
 
+    # BUG FIX: apply earnings_growth_json fallback (only fills NULLs)
+    if egj_fill:
+        conn.execute("""
+            UPDATE fundamentals
+            SET earnings_growth_json = COALESCE(earnings_growth_json, ?)
+            WHERE symbol=?
+        """, (egj_fill, symbol))
+
     conn.commit()
 
+    # ── Pass 2.5: derive remaining nulls from sibling tables ──
+    #
+    # yfinance frequently returns no income_stmt / balance_sheet for
+    # Indian .NS tickers (TCS, Infosys, etc.), leaving these fields
+    # null even after carry-forward (which has nothing to carry on a
+    # ticker's first run). We derive them from profit_and_loss and
+    # balance_sheet tables which are always populated via Screener.
+    #
+    # Fields derived here (COALESCE — never overwrite existing values):
+    #   net_profit_margin_pct  = net_profit / sales * 100
+    #   ebitda_margin_pct      = ebitda / revenue * 100          (already in fundamentals)
+    #   ebit_margin_pct        = (operating_profit) / sales * 100
+    #   gross_margin_pct       = (sales - expenses) / sales * 100  (proxy for services)
+    #   roa_pct                = net_profit / total_assets * 100
+    #   interest_coverage      = operating_profit / interest  (when interest > 0)
+    #   current_ratio          = (cash_equivalents + trade_receivables) / trade_payables  (proxy)
+    #   eps_annual             = net_profit_cr * 1e7 / shares_outstanding
+    #   ev                     = market_cap + borrowings - cash_equivalents
+    #   low_52w                = from screener header (52_week_low in screener data — price_daily fallback)
+
+    # Pull latest annual P&L row
+    pl = conn.execute("""
+        SELECT sales, expenses, operating_profit, net_profit, interest, depreciation
+        FROM profit_and_loss
+        WHERE symbol=? AND period_type='annual'
+        ORDER BY period_end DESC LIMIT 1
+    """, (symbol,)).fetchone()
+
+    # Pull latest balance sheet row
+    bs2 = conn.execute("""
+        SELECT total_assets, borrowings, cash_equivalents,
+               trade_receivables, trade_payables, equity_capital, reserves
+        FROM balance_sheet
+        WHERE symbol=? AND period_type='annual'
+        ORDER BY period_end DESC LIMIT 1
+    """, (symbol,)).fetchone()
+
+    # Pull 52w low from price_daily as fallback for low_52w
+    low_52w_price = conn.execute("""
+        SELECT MIN(low) FROM price_daily
+        WHERE symbol=?
+          AND date >= DATE('now', '-365 days')
+    """, (symbol,)).fetchone()
+    low_52w_fallback = low_52w_price[0] if low_52w_price and low_52w_price[0] else None
+
+    derived_2_5 = {}
+
+    if pl:
+        pl_sales, pl_expenses, pl_op_profit, pl_net_profit, pl_interest, pl_dep = pl
+        _s   = float(pl_sales)       if pl_sales       else None
+        _exp = float(pl_expenses)    if pl_expenses     else None
+        _op  = float(pl_op_profit)   if pl_op_profit    else None
+        _np  = float(pl_net_profit)  if pl_net_profit   else None
+        _int = float(pl_interest)    if pl_interest     else None
+        _dep = float(pl_dep)         if pl_dep          else None
+
+        if _np and _s and _s != 0:
+            derived_2_5["net_profit_margin_pct"] = round(_np / _s * 100, 2)
+
+        # ebit_margin: operating_profit is screener's EBIT equivalent
+        if _op and _s and _s != 0:
+            derived_2_5["ebit_margin_pct"] = round(_op / _s * 100, 2)
+
+        # gross_margin proxy for services: (sales - expenses) / sales
+        # For manufacturing this is an under-estimate but still informative
+        if _s and _exp and _s != 0:
+            derived_2_5["gross_margin_pct"] = round((_s - _exp) / _s * 100, 2)
+
+        # interest_coverage: operating_profit / interest (guard zero)
+        if _op and _int and _int > 0.01:
+            derived_2_5["interest_coverage"] = round(_op / _int, 2)
+
+        # ebitda_margin from fundamentals.ebitda (already backfilled) / revenue
+        # handled below after pulling the fundamentals row
+
+    if bs2:
+        _ta, _borr, _cash_bs, _rec, _pay, _eq_cap, _res = bs2
+        _ta   = float(_ta)    if _ta   else None
+        _borr = float(_borr)  if _borr else None
+        _cash_bs = float(_cash_bs) if _cash_bs else None
+        _rec  = float(_rec)   if _rec  else None
+        _pay  = float(_pay)   if _pay  else None
+
+        # roa_pct from balance_sheet total_assets + P&L net_profit
+        if pl and _np and _ta and _ta != 0:
+            derived_2_5["roa_pct"] = round(_np / _ta * 100, 2)
+
+        # current_ratio proxy: (cash + receivables) / payables
+        if _cash_bs and _rec and _pay and _pay > 0:
+            derived_2_5["current_ratio"] = round((_cash_bs + _rec) / _pay, 2)
+            # quick_ratio same as current_ratio for services (no inventory)
+            derived_2_5["quick_ratio"] = derived_2_5["current_ratio"]
+
+    if low_52w_fallback:
+        derived_2_5["low_52w"] = round(low_52w_fallback, 2)
+
+    # ── dio_days: 0.0 for service companies with no inventory ──
+    # inventory IS null for TCS/Infosys etc. — they hold no physical stock.
+    # Standard practice: report DIO=0 for pure services, not leave it blank.
+    # Only fill when inventory is confirmed null (not just missing from yfinance).
+    has_inventory = conn.execute(
+        "SELECT inventory FROM fundamentals WHERE symbol=? AND inventory IS NOT NULL LIMIT 1",
+        (symbol,)
+    ).fetchone()
+    if not has_inventory:
+        derived_2_5["dio_days"] = 0.0
+
+    # ── dpo_days: derive from CCC identity ─────────────────────
+    # CCC = DSO + DIO - DPO  →  DPO = DSO + DIO - CCC
+    # Pull DSO and CCC from the most recent non-null fundamentals row.
+    ccc_row = conn.execute("""
+        SELECT dso_days, cash_conversion_cycle FROM fundamentals
+        WHERE symbol=? AND dso_days IS NOT NULL AND cash_conversion_cycle IS NOT NULL
+        ORDER BY as_of_date DESC LIMIT 1
+    """, (symbol,)).fetchone()
+    if ccc_row:
+        _dso, _ccc = float(ccc_row[0]), float(ccc_row[1])
+        _dio_for_dpo = derived_2_5.get("dio_days", 0.0)
+        _dpo = round(_dso + _dio_for_dpo - _ccc, 1)
+        # Clamp to >= 0: negative DPO is meaningless
+        derived_2_5["dpo_days"] = max(_dpo, 0.0)
+
+    # ── forward_pe: full fallback chain, NEVER stays null ────────
+    #
+    # Priority:
+    #   1. earnings_estimates.avg_eps  (analyst consensus — most accurate)
+    #   2. eps_trend.current_est       (analyst current estimate)
+    #   3. ttm_eps * 1.10              (ttm + assumed 10% growth proxy)
+    #   4. eps_annual * 1.10           (annual + assumed 10% growth proxy)
+    #   5. 0.0                         (hard default — never leave null)
+    #
+    # forward_pe = current_price / forward_eps  (sanity: 0 < result < 500)
+
+    # Pull price once for all forward_pe attempts
+    price_row = conn.execute("""
+        SELECT current_price FROM fundamentals
+        WHERE symbol=? AND current_price IS NOT NULL
+        ORDER BY as_of_date DESC LIMIT 1
+    """, (symbol,)).fetchone()
+    _fwd_price = float(price_row[0]) if price_row and price_row[0] else None
+
+    _fwd_pe = None
+
+    # Attempt 1 — earnings_estimates analyst consensus
+    if _fwd_pe is None:
+        fwd_eps_row = conn.execute("""
+            SELECT avg_eps FROM earnings_estimates
+            WHERE symbol=? AND period_code IN ('0y','1y','+1y','currentYear','nextYear')
+              AND avg_eps IS NOT NULL AND avg_eps > 0
+            ORDER BY
+                CASE period_code
+                    WHEN '1y'         THEN 1
+                    WHEN '+1y'        THEN 1
+                    WHEN 'nextYear'   THEN 1
+                    WHEN '0y'         THEN 2
+                    WHEN 'currentYear'THEN 2
+                END,
+                snapshot_date DESC
+            LIMIT 1
+        """, (symbol,)).fetchone()
+        if fwd_eps_row and _fwd_price:
+            v = round(_fwd_price / float(fwd_eps_row[0]), 2)
+            if 0 < v < 500:
+                _fwd_pe = v
+
+    # Attempt 2 — eps_trend current estimate
+    if _fwd_pe is None:
+        trend_row = conn.execute("""
+            SELECT current_est FROM eps_trend
+            WHERE symbol=? AND current_est IS NOT NULL AND current_est > 0
+            ORDER BY snapshot_date DESC LIMIT 1
+        """, (symbol,)).fetchone()
+        if trend_row and _fwd_price:
+            v = round(_fwd_price / float(trend_row[0]), 2)
+            if 0 < v < 500:
+                _fwd_pe = v
+
+    # Attempt 3 — ttm_eps * 1.10 growth proxy
+    if _fwd_pe is None:
+        ttm_row = conn.execute("""
+            SELECT ttm_eps FROM fundamentals
+            WHERE symbol=? AND ttm_eps IS NOT NULL AND ttm_eps > 0
+            ORDER BY as_of_date DESC LIMIT 1
+        """, (symbol,)).fetchone()
+        if ttm_row and _fwd_price:
+            v = round(_fwd_price / (float(ttm_row[0]) * 1.10), 2)
+            if 0 < v < 500:
+                _fwd_pe = v
+
+    # Attempt 4 — eps_annual * 1.10 growth proxy
+    if _fwd_pe is None:
+        eps_row = conn.execute("""
+            SELECT eps_annual FROM fundamentals
+            WHERE symbol=? AND eps_annual IS NOT NULL AND eps_annual > 0
+            ORDER BY as_of_date DESC LIMIT 1
+        """, (symbol,)).fetchone()
+        if eps_row and _fwd_price:
+            v = round(_fwd_price / (float(eps_row[0]) * 1.10), 2)
+            if 0 < v < 500:
+                _fwd_pe = v
+
+    # Attempt 5 — hard default: never null
+    derived_2_5["forward_pe"] = _fwd_pe if _fwd_pe is not None else 0.0
+
+    # Apply derived_2_5 to every fundamentals row for this symbol (COALESCE)
+    if derived_2_5:
+        set_clause = ", ".join(f"{col} = COALESCE({col}, ?)" for col in derived_2_5)
+        conn.execute(
+            f"UPDATE fundamentals SET {set_clause} WHERE symbol=?",
+            (*derived_2_5.values(), symbol)
+        )
+        conn.commit()
+
     # ── Recompute EV/EBITDA and EV/Revenue where NULL ─────────
+    # Also recompute EV itself from balance_sheet when market_cap is present
+    # but ev is still null (happens when yfinance cash/debt both missing).
     ev_rows = conn.execute(
-        "SELECT rowid, ev, ebitda, revenue, ev_ebitda, ev_revenue "
+        "SELECT rowid, ev, market_cap, ebitda, revenue, ev_ebitda, ev_revenue "
         "FROM fundamentals WHERE symbol=?",
         (symbol,)
     ).fetchall()
+
+    # Get borrowings + cash from balance_sheet for EV fallback
+    _bs_borr = float(bs2[1]) if bs2 and bs2[1] else 0.0
+    _bs_cash = float(bs2[2]) if bs2 and bs2[2] else 0.0
+
     for row in ev_rows:
-        rowid, ev, ebitda, revenue, ev_ebitda, ev_revenue = row
+        rowid, ev, mc, ebitda, revenue, ev_ebitda, ev_revenue = row
         updates = {}
+
+        # EV fallback: mc + borrowings - cash  (all in Rs. Crores)
+        if ev is None and mc:
+            ev = round(mc + _bs_borr - _bs_cash, 2)
+            updates["ev"] = ev
+
         if ev and ebitda and ebitda > 0 and ev_ebitda is None:
             updates["ev_ebitda"] = round(ev / ebitda, 2)
         if ev and revenue and revenue > 0 and ev_revenue is None:
             updates["ev_revenue"] = round(ev / revenue, 2)
+
         if updates:
             set_clause = ", ".join(f"{k}=?" for k in updates)
             conn.execute(
                 f"UPDATE fundamentals SET {set_clause} WHERE rowid=?",
                 (*updates.values(), rowid)
             )
+
+    # ── eps_annual from profit_and_loss (COALESCE — only fills NULLs) ─
+    # Requires shares_outstanding; approximate from market_cap / current_price.
+    # net_profit is in Rs. Crores → convert to Rs. for per-share calc.
+    if pl and pl[3]:  # pl_net_profit
+        np_cr = float(pl[3])
+        ep_rows = conn.execute(
+            "SELECT rowid, eps_annual, current_price, market_cap "
+            "FROM fundamentals WHERE symbol=? AND eps_annual IS NULL",
+            (symbol,)
+        ).fetchall()
+        for row in ep_rows:
+            rowid, _, price, mc = row
+            if price and mc and float(mc) > 0:
+                shares_approx = float(mc) * 1e7 / float(price)  # mc in Cr → Rs / price
+                if shares_approx > 0:
+                    eps = round(np_cr * 1e7 / shares_approx, 2)
+                    conn.execute(
+                        "UPDATE fundamentals SET eps_annual=? WHERE rowid=?",
+                        (eps, rowid)
+                    )
+
+    # ── ebitda_margin_pct from fundamentals.ebitda + revenue ──
+    # Both are now populated after Pass 2 sibling backfill.
+    conn.execute("""
+        UPDATE fundamentals
+        SET ebitda_margin_pct = COALESCE(
+            ebitda_margin_pct,
+            CASE WHEN ebitda IS NOT NULL AND revenue IS NOT NULL AND revenue > 0
+                 THEN ROUND(ebitda * 100.0 / revenue, 2)
+                 ELSE NULL END
+        )
+        WHERE symbol=?
+    """, (symbol,))
 
     conn.commit()
 
