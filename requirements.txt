@@ -4,3 +4,6 @@ requests
 httpx
 beautifulsoup4
 graphifyy
+fastapi
+uvicorn[standard]
+pydantic

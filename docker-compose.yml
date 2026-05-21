@@ -1,27 +1,12 @@
-version: "3.9"
-
 services:
+  quant_copilot_equity-research-agent:
+    build: .
+    container_name: quant_copilot_equity-research-agent
 
-  quant_copilot_Equity-Research-Agent:
-
-    build:
-      context: .
-      dockerfile: Dockerfile
-
-    container_name: quant_copilot_Equity-Research-Agent
-
-    working_dir: /app
-
-    command: python main.py
-
-    volumes:
-      - .:/app
-      - sqlite_data:/app/database
-
-    environment:
-      - PYTHONUNBUFFERED=1
+    ports:
+      - "8000:8000"
 
     restart: unless-stopped
 
-volumes:
-  sqlite_data:
+    environment:
+      - PYTHONUNBUFFERED=1
