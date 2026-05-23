@@ -7,3 +7,4 @@ graphifyy
 fastapi
 uvicorn[standard]
 pydantic
+PyMySQL
