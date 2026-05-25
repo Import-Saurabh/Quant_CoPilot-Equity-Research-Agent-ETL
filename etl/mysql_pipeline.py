@@ -512,7 +512,7 @@ def extract_macro(_ticker):
     print(f"\n  ▶ Extracting Macro data …")
     snap_date = date.today().isoformat()
     try:
-        from extract.macro import (
+        from extract.macro_mysql import (
             get_market_indices,
             get_forex_commodities,
             get_rbi_rates,

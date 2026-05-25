@@ -9,9 +9,31 @@ Prints a missing-value report after every load cycle.
 Dependencies:  pip install mysql-connector-python
 """
 
+import math
 import mysql.connector
 from datetime import datetime, date, timedelta
 from typing import Optional
+
+
+# ─────────────────────────────────────────────────────────────
+# Value sanitiser
+# ─────────────────────────────────────────────────────────────
+def _clean_pct(v):
+    """
+    Convert shareholding percentage strings to float.
+    '71.64%' → 71.64,  '0.00%' → 0.0,  None → None
+    """
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        f = float(v)
+        return None if (math.isnan(f) or math.isinf(f)) else f
+    s = str(v).replace("%", "").replace(",", "").strip()
+    try:
+        f = float(s)
+        return None if (math.isnan(f) or math.isinf(f)) else f
+    except (ValueError, TypeError):
+        return None
 
 # ─────────────────────────────────────────────────────────────
 # Screener label  →  shareholding column mapping
@@ -161,7 +183,8 @@ def load_shareholding(db_config, symbol, dates, shareholding_rows):
         for screener_label, col_name in PARENT_LABEL_MAP.items():
             if screener_label in shareholding_rows and col_name not in col_values:
                 vals = shareholding_rows[screener_label]
-                col_values[col_name] = vals[col_idx] if col_idx < len(vals) else None
+                raw  = vals[col_idx] if col_idx < len(vals) else None
+                col_values[col_name] = _clean_pct(raw)
 
         _upsert_shareholding(cursor, symbol, period_end, col_values, "screener")
         inserted += 1
