@@ -123,6 +123,13 @@ def load_technicals(db_config: dict, df: pd.DataFrame, symbol: str):
     conn   = _get_conn()
     cursor = conn.cursor()
 
+    # Ensure symbol exists in stocks table (FK guard)
+    cursor.execute(
+        "INSERT IGNORE INTO stocks (symbol, exchange) VALUES (%s, 'NSE')",
+        (symbol,)
+    )
+    conn.commit()
+
     cursor.executemany("""
         INSERT INTO technical_indicators
             (symbol, date, close,

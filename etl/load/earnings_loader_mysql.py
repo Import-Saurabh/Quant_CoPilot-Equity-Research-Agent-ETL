@@ -87,10 +87,22 @@ def load_earnings_history(db_config: dict, records: list, symbol: str):
             _to_float(r.get("surprise_pct")),
         )
         for r in records
+        if r.get("quarter_end") not in (None, "", "None")   # skip blank dates
     ]
+
+    if not rows:
+        print(f"  ⚠  earnings_history [{symbol}]: no valid rows — skipping")
+        return
 
     conn   = _get_conn()
     cursor = conn.cursor()
+
+    # Ensure symbol exists in stocks (FK guard — yfinance loaders don't create it)
+    cursor.execute(
+        "INSERT IGNORE INTO stocks (symbol, exchange) VALUES (%s, 'NSE')",
+        (symbol,)
+    )
+    conn.commit()
 
     cursor.executemany("""
         INSERT INTO earnings_history
@@ -143,6 +155,13 @@ def load_earnings_estimates(db_config: dict, records: list, symbol: str):
 
     conn   = _get_conn()
     cursor = conn.cursor()
+
+    # Ensure symbol exists (FK guard)
+    cursor.execute(
+        "INSERT IGNORE INTO stocks (symbol, exchange) VALUES (%s, 'NSE')",
+        (symbol,)
+    )
+    conn.commit()
 
     cursor.executemany("""
         INSERT INTO earnings_estimates
@@ -198,6 +217,13 @@ def load_eps_trend(db_config: dict, records: list, symbol: str):
     conn   = _get_conn()
     cursor = conn.cursor()
 
+    # Ensure symbol exists (FK guard)
+    cursor.execute(
+        "INSERT IGNORE INTO stocks (symbol, exchange) VALUES (%s, 'NSE')",
+        (symbol,)
+    )
+    conn.commit()
+
     cursor.executemany("""
         INSERT INTO eps_trend
             (symbol, snapshot_date, period_code,
@@ -251,6 +277,13 @@ def load_eps_revisions(db_config: dict, records: list, symbol: str):
 
     conn   = _get_conn()
     cursor = conn.cursor()
+
+    # Ensure symbol exists (FK guard)
+    cursor.execute(
+        "INSERT IGNORE INTO stocks (symbol, exchange) VALUES (%s, 'NSE')",
+        (symbol,)
+    )
+    conn.commit()
 
     cursor.executemany("""
         INSERT INTO eps_revisions

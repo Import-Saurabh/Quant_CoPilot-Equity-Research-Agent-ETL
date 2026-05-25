@@ -8,9 +8,52 @@ Also prints a missing-value report after every insert cycle.
 Dependencies:  pip install mysql-connector-python
 """
 
+import math
 import mysql.connector
 from datetime import datetime, date
 from typing import Optional
+
+
+# ─────────────────────────────────────────────────────────────
+# Value sanitisers
+# ─────────────────────────────────────────────────────────────
+def _clean_value(v):
+    """
+    Convert Screener child-item values to a plain Python float/None.
+    Handles:
+      • Already a float/int   → return as-is
+      • Comma-formatted str   '2,342'  → 2342.0
+      • Dict artifact         {'class': 'strong'}  → None
+      • None / empty string   → None
+      • NaN / Inf             → None
+    """
+    if v is None:
+        return None
+    if isinstance(v, dict):          # HTML artifact from scraper
+        return None
+    try:
+        f = float(str(v).replace(",", "").strip())
+        return None if (math.isnan(f) or math.isinf(f)) else f
+    except (ValueError, TypeError):
+        return None
+
+
+def _clean_pct(v):
+    """
+    Convert percentage strings like '15%', '-3%', '145%' to float (15.0, -3.0, …).
+    Returns None for non-parseable values.
+    """
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        f = float(v)
+        return None if (math.isnan(f) or math.isinf(f)) else f
+    s = str(v).replace("%", "").replace(",", "").strip()
+    try:
+        f = float(s)
+        return None if (math.isnan(f) or math.isinf(f)) else f
+    except (ValueError, TypeError):
+        return None
 
 # ─────────────────────────────────────────────────────────────
 # Screener label  →  balance_sheet column mapping
@@ -150,7 +193,7 @@ def upsert_bs_item(
     """
     cursor.execute(sql, [
         symbol, period_end, "annual", is_consolidated,
-        parent_label[:100], item_label[:100], value, sort_order, data_source,
+        parent_label[:100], item_label[:100], _clean_value(value), sort_order, data_source,
     ])
 
 

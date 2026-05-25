@@ -8,9 +8,41 @@ Prints a missing-value report after every load cycle.
 Dependencies:  pip install mysql-connector-python
 """
 
+import math
 import mysql.connector
 from datetime import datetime, date, timedelta
 from typing import Optional
+
+
+# ─────────────────────────────────────────────────────────────
+# Value sanitisers
+# ─────────────────────────────────────────────────────────────
+def _clean_value(v):
+    """Comma-str '1,651' → 1651.0; dict/None/bad → None."""
+    if v is None:
+        return None
+    if isinstance(v, dict):
+        return None
+    try:
+        f = float(str(v).replace(",", "").strip())
+        return None if (math.isnan(f) or math.isinf(f)) else f
+    except (ValueError, TypeError):
+        return None
+
+
+def _clean_pct(v):
+    """Pct str '26%' → 26.0; None/bad → None."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        f = float(v)
+        return None if (math.isnan(f) or math.isinf(f)) else f
+    s = str(v).replace("%", "").replace(",", "").strip()
+    try:
+        f = float(s)
+        return None if (math.isnan(f) or math.isinf(f)) else f
+    except (ValueError, TypeError):
+        return None
 
 # ─────────────────────────────────────────────────────────────
 # Screener label  →  quarterly_results column mapping
@@ -185,11 +217,13 @@ def load_quarterly_results(db_config, symbol, dates, main_rows,
             print(f"  [SKIP] '{raw_date}' is TTM or unparseable — skipping")
             continue
 
+        PCT_COLS = {"opm_pct", "tax_pct"}
         col_values: dict = {}
         for screener_label, col_name in PARENT_LABEL_MAP.items():
             if screener_label in main_rows and col_name not in col_values:
                 vals = main_rows[screener_label]
-                col_values[col_name] = vals[col_idx] if col_idx < len(vals) else None
+                raw  = vals[col_idx] if col_idx < len(vals) else None
+                col_values[col_name] = _clean_pct(raw) if col_name in PCT_COLS else _clean_value(raw)
 
         # Also skip "Raw PDF" rows at scraper level; safe to ignore here too
         _upsert_parent(cursor, symbol, period_end, is_consolidated,
@@ -201,7 +235,7 @@ def load_quarterly_results(db_config, symbol, dates, main_rows,
                 value = vals[col_idx] if col_idx < len(vals) else None
                 _upsert_item(cursor, symbol, period_end, is_consolidated,
                              parent_label, child_label,
-                             value, sort_idx, "screener")
+                             _clean_value(value), sort_idx, "screener")
                 inserted_child += 1
 
     conn.commit()
