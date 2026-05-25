@@ -1,5 +1,5 @@
 """
-mysql_pipeline.py    Full Screener + yfinance ETL Pipeline  (v3)
+mysql_pipeline.py  –  Full Screener + yfinance ETL Pipeline  (v3)
 ==================================================================
 Changes vs v2:
   • New sections added:  price (pr), technical (ti),
@@ -40,6 +40,9 @@ Dependencies:
 """
 
 import sys
+import os
+# ── Path fix: database\ lives one level up from etl\ ──────────────────
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import traceback
 from datetime import datetime, date
 

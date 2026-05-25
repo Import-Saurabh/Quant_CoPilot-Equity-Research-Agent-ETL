@@ -20,7 +20,7 @@ Key differences vs SQLite loader:
 
 import math
 import pandas as pd
-import mysql.connector
+from database.db_mysql import get_connection as _get_conn
 
 
 # ─────────────────────────────────────────────────────────────
@@ -91,7 +91,7 @@ def load_price(db_config: dict, df: pd.DataFrame, symbol: str,
             source,
         ))
 
-    conn   = mysql.connector.connect(**db_config)
+    conn   = _get_conn()
     cursor = conn.cursor()
 
     cursor.executemany("""

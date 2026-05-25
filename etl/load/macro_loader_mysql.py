@@ -12,7 +12,7 @@ Schema tables targeted (mysql_schema_v2.sql):
                           so we must NOT include it in INSERT — MySQL populates it.
 
 Key differences vs SQLite loader:
-  • Uses mysql-connector-python cursor, not sqlite3 connection
+  • Uses PyMySQL via database.db_mysql.get_connection()
   • INSERT OR IGNORE  → INSERT IGNORE INTO  (MySQL syntax)
   • Paramstyle: %s  not  ?
   • rbi_rates: is_cached column absent from schema — omitted
@@ -21,15 +21,11 @@ Key differences vs SQLite loader:
 ────────────────────────────────────────────────────────────────
 """
 
-import mysql.connector
+from database.db_mysql import get_connection as _get_conn_base
 
-
-# ─────────────────────────────────────────────────────────────
-#  Internal helper
-# ─────────────────────────────────────────────────────────────
-
-def _get_conn(db_config: dict):
-    return mysql.connector.connect(**db_config)
+def _get_conn(_db_config=None):
+    """Always use db_mysql credentials — db_config arg kept for API compat."""
+    return _get_conn_base()
 
 
 # ─────────────────────────────────────────────────────────────

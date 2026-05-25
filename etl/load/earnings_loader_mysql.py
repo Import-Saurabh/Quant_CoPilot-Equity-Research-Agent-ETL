@@ -33,7 +33,7 @@ NOTE ON UPSERT PATTERN
 """
 
 import math
-import mysql.connector
+from database.db_mysql import get_connection as _get_conn
 
 
 # ─────────────────────────────────────────────────────────────
@@ -89,7 +89,7 @@ def load_earnings_history(db_config: dict, records: list, symbol: str):
         for r in records
     ]
 
-    conn   = mysql.connector.connect(**db_config)
+    conn   = _get_conn()
     cursor = conn.cursor()
 
     cursor.executemany("""
@@ -141,7 +141,7 @@ def load_earnings_estimates(db_config: dict, records: list, symbol: str):
         for r in records
     ]
 
-    conn   = mysql.connector.connect(**db_config)
+    conn   = _get_conn()
     cursor = conn.cursor()
 
     cursor.executemany("""
@@ -195,7 +195,7 @@ def load_eps_trend(db_config: dict, records: list, symbol: str):
         for r in records
     ]
 
-    conn   = mysql.connector.connect(**db_config)
+    conn   = _get_conn()
     cursor = conn.cursor()
 
     cursor.executemany("""
@@ -249,7 +249,7 @@ def load_eps_revisions(db_config: dict, records: list, symbol: str):
         for r in records
     ]
 
-    conn   = mysql.connector.connect(**db_config)
+    conn   = _get_conn()
     cursor = conn.cursor()
 
     cursor.executemany("""

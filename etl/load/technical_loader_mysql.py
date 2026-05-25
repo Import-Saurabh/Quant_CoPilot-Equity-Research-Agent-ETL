@@ -35,8 +35,9 @@ Key differences vs SQLite loader:
 
 import math
 import pandas as pd
-import mysql.connector
-from database.db_mysql import get_connection
+from database.db_mysql import get_connection as _get_conn
+
+
 # ─────────────────────────────────────────────────────────────
 #  Helper
 # ─────────────────────────────────────────────────────────────
@@ -119,7 +120,7 @@ def load_technicals(db_config: dict, df: pd.DataFrame, symbol: str):
         print(f"  ⚠  technical_indicators [{symbol}]: no valid rows after filtering")
         return
 
-    conn   = mysql.connector.connect(**db_config)
+    conn   = _get_conn()
     cursor = conn.cursor()
 
     cursor.executemany("""
