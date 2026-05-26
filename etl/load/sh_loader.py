@@ -12,7 +12,6 @@ Fixes vs v1
     (num_shareholders and total_institutional_pct were excluded in v1).
 5.  Missing-value report now correctly detects absent FII/DII using the
     full alias set instead of a single canonical label.
-6.  completeness_pct written per row (fraction of non-NULL pct columns).
 
 Dependencies:  pip install mysql-connector-python
 """
@@ -137,13 +136,13 @@ def parse_quarter_end(raw: str) -> Optional[date]:
 # Upsert  (FIX 4: writes all schema columns in one statement)
 # ─────────────────────────────────────────────────────────────────
 
-# All columns that go into the INSERT (excluding PK / auto cols)
+# All columns that go into the INSERT (must match shareholding schema exactly)
+# Note: shareholding has no completeness_pct / missing_fields_json columns
 _ALL_DATA_COLS = [
     "promoter_pct", "fii_pct", "dii_pct", "public_pct",
     "government_pct", "others_pct",
     "total_institutional_pct",   # FIX 3
     "num_shareholders",          # FIX 2
-    "completeness_pct",          # FIX 6
     "data_source",
 ]
 
@@ -265,10 +264,6 @@ def load_shareholding(db_config: dict, symbol: str,
             col_values["total_institutional_pct"] = round(fii + dii, 4)
         else:
             col_values["total_institutional_pct"] = None
-
-        # FIX 6: completeness_pct (fraction of the 4 core pct cols that are non-NULL)
-        filled = sum(1 for c in PCT_COLS if col_values.get(c) is not None)
-        col_values["completeness_pct"] = round(filled / len(PCT_COLS) * 100, 2)
 
         _upsert_shareholding(cursor, symbol, period_end, col_values, "screener")
         inserted += 1
