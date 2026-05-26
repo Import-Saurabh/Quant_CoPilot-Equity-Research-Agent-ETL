@@ -41,8 +41,10 @@ Dependencies:
 
 import sys
 import os
-# ── Path fix: database\ lives one level up from etl\ ──────────────────
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+# ── Path fixes ─────────────────────────────────────────────────────────
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(_HERE, ".."))   # project root (for extract\, load\ packages)
+sys.path.insert(0, _HERE)                         # etl\ itself  (for stocks_mysql.py)
 import traceback
 from datetime import datetime, date
 
@@ -63,6 +65,8 @@ from load.cf_loader import load_cash_flow
 from load.qr_loader import load_quarterly_results
 from load.sh_loader import load_shareholding
 from load.gm_loader import load_growth_metrics
+from load.stocks_loader_mysql import load_stock_master
+from extract.stocks_mysql import scrape_stock_master_details
 
 # ── yfinance / MySQL loaders ──────────────────────────────────────
 from load.price_loader_mysql     import load_price
@@ -103,10 +107,11 @@ HEADERS = {
     "X-Requested-With": "XMLHttpRequest",
 }
 
-ALL_SECTIONS    = ["bs", "pl", "cf", "qr", "sh", "gm", "pr", "ti", "eh", "ee", "et", "er", "mc"]
-SCREENER_SECTIONS = ["bs", "pl", "cf", "qr", "sh", "gm"]
+ALL_SECTIONS    = ["sm", "bs", "pl", "cf", "qr", "sh", "gm", "pr", "ti", "eh", "ee", "et", "er", "mc"]
+SCREENER_SECTIONS = ["sm", "bs", "pl", "cf", "qr", "sh", "gm"]
 
 SECTION_LABELS = {
+    "sm": "Stock Master",
     "bs": "Balance Sheet",
     "pl": "Profit & Loss",
     "cf": "Cash Flow",
@@ -232,6 +237,25 @@ def _print_children(child_items, dates):
 # ─────────────────────────────────────────────────────────────────
 # ❹  Per-section extractors — Screener
 # ─────────────────────────────────────────────────────────────────
+
+def extract_stock_master(ticker):
+    """
+    Scrape master metadata for a stock: screener_id, sector hierarchy,
+    market_cap_cr.  Uses stocks_mysql.scrape_stock_master_details().
+    """
+    print(f"\n  ▶ Extracting Stock Master …")
+    try:
+        data = scrape_stock_master_details(ticker)
+        if not data:
+            print(f"  ⚠  stock_master: no data returned for {ticker}")
+            return None
+        # Carry raw_ticker so the loader can infer exchange from suffix
+        data["_raw_ticker"] = ticker
+        return data
+    except Exception as e:
+        print(f"  [ERROR] extract_stock_master: {e}")
+        return None
+
 
 def extract_balance_sheet(ticker):
     print(f"\n  ▶ Extracting Balance Sheet …")
@@ -556,6 +580,7 @@ def extract_macro(_ticker):
 # ─────────────────────────────────────────────────────────────────
 
 SECTION_EXTRACT = {
+    "sm": extract_stock_master,
     "bs": extract_balance_sheet,
     "pl": extract_profit_loss,
     "cf": extract_cash_flow,
@@ -576,7 +601,13 @@ def _load_result(section: str, result: dict):
     """Route result dict to the correct MySQL loader."""
 
     # ── Screener sections ────────────────────────────────────────
-    if section == "bs":
+    if section == "sm":
+        load_stock_master(
+            DB_CONFIG,
+            result,
+            raw_ticker=result.get("_raw_ticker"),
+        )
+    elif section == "bs":
         load_balance_sheet(
             DB_CONFIG, result["symbol"], result["dates"],
             result["main_rows"], result["child_items"], result["is_consolidated"],
