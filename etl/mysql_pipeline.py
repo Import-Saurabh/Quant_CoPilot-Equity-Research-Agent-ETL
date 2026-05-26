@@ -62,6 +62,7 @@ from load.pl_loader import load_profit_loss
 from load.cf_loader import load_cash_flow
 from load.qr_loader import load_quarterly_results
 from load.sh_loader import load_shareholding
+from load.gm_loader import load_growth_metrics
 
 # ── yfinance / MySQL loaders ──────────────────────────────────────
 from load.price_loader_mysql     import load_price
@@ -102,8 +103,8 @@ HEADERS = {
     "X-Requested-With": "XMLHttpRequest",
 }
 
-ALL_SECTIONS    = ["bs", "pl", "cf", "qr", "sh", "pr", "ti", "eh", "ee", "et", "er", "mc"]
-SCREENER_SECTIONS = ["bs", "pl", "cf", "qr", "sh"]
+ALL_SECTIONS    = ["bs", "pl", "cf", "qr", "sh", "gm", "pr", "ti", "eh", "ee", "et", "er", "mc"]
+SCREENER_SECTIONS = ["bs", "pl", "cf", "qr", "sh", "gm"]
 
 SECTION_LABELS = {
     "bs": "Balance Sheet",
@@ -111,6 +112,7 @@ SECTION_LABELS = {
     "cf": "Cash Flow",
     "qr": "Quarterly Results",
     "sh": "Shareholding",
+    "gm": "Growth Metrics",
     "pr": "Price Daily",
     "ti": "Technical Indicators",
     "eh": "Earnings History",
@@ -334,6 +336,21 @@ def extract_shareholding(ticker):
     return dict(symbol=symbol, dates=dates, shareholding_rows=rows)
 
 
+def extract_growth_metrics(ticker):
+    print(f"\n  ▶ Extracting Growth Metrics …")
+    symbol = clean_ticker_for_screener(ticker)
+    try:
+        from extract.growth_metrcis import scrape_growth_metrics
+        metrics = scrape_growth_metrics(ticker)
+        if not metrics:
+            print(f"  ⚠  growth_metrics: no data returned for {ticker}")
+            return None
+        return dict(symbol=symbol, metrics=metrics)
+    except Exception as e:
+        print(f"  [ERROR] extract_growth_metrics: {e}")
+        return None
+
+
 # ─────────────────────────────────────────────────────────────────
 # ❺  Per-section extractors — yfinance
 # ─────────────────────────────────────────────────────────────────
@@ -544,6 +561,7 @@ SECTION_EXTRACT = {
     "cf": extract_cash_flow,
     "qr": extract_quarterly_results,
     "sh": extract_shareholding,
+    "gm": extract_growth_metrics,
     "pr": extract_price,
     "ti": extract_technicals,
     "eh": extract_earnings_history,
@@ -582,6 +600,11 @@ def _load_result(section: str, result: dict):
         load_shareholding(
             DB_CONFIG, result["symbol"], result["dates"],
             result["shareholding_rows"],
+        )
+
+    elif section == "gm":
+        load_growth_metrics(
+            DB_CONFIG, result["symbol"], result["metrics"],
         )
 
     # ── yfinance / MySQL sections ────────────────────────────────
