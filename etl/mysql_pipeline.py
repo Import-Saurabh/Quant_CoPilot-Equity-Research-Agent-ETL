@@ -33,6 +33,7 @@ Section codes:
     et  = EPS Trend            (yfinance)
     er  = EPS Revisions        (yfinance)
     mc  = Macro (indices/forex/RBI/indicators)
+    ca  = Corporate Actions    (yfinance — dividends & splits)
 
 Dependencies:
     pip install requests beautifulsoup4 mysql-connector-python
@@ -84,6 +85,8 @@ from load.macro_loader_mysql import (
     load_rbi_rates,
     load_macro_indicators,
 )
+from load.ca_loader import load_corporate_actions
+from extract.my_corporate_actions import scrape_corporate_actions
 
 # ─────────────────────────────────────────────────────────────────
 # ❶  MySQL connection config — edit before running
@@ -126,7 +129,7 @@ def _get_with_retry(url, headers=None, retries=4, backoff=5):
         return resp
     return resp  # return last response after exhausting retries
 
-ALL_SECTIONS    = ["sm", "bs", "pl", "cf", "qr", "sh", "gm", "pr", "ti", "eh", "ee", "et", "er", "mc"]
+ALL_SECTIONS    = ["sm", "bs", "pl", "cf", "qr", "sh", "gm", "pr", "ti", "eh", "ee", "et", "er", "mc", "ca"]
 SCREENER_SECTIONS = ["sm", "bs", "pl", "cf", "qr", "sh", "gm"]
 
 SECTION_LABELS = {
@@ -144,6 +147,7 @@ SECTION_LABELS = {
     "et": "EPS Trend",
     "er": "EPS Revisions",
     "mc": "Macro",
+    "ca": "Corporate Actions",
 }
 
 
@@ -696,6 +700,7 @@ SECTION_EXTRACT = {
     "et": extract_eps_trend,
     "er": extract_eps_revisions,
     "mc": extract_macro,
+    "ca": scrape_corporate_actions,
 }
 
 
@@ -780,6 +785,9 @@ def _load_result(section: str, result: dict):
                       f" dictionary=False)")
             except Exception as e:
                 print(f"  [MACRO] ✗ {fn.__name__} failed — {e}")
+
+    elif section == "ca":
+        load_corporate_actions(DB_CONFIG, result["symbol"], result["actions"])
 
 
 # ─────────────────────────────────────────────────────────────────
