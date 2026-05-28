@@ -107,6 +107,25 @@ HEADERS = {
     "X-Requested-With": "XMLHttpRequest",
 }
 
+
+def _get_with_retry(url, headers=None, retries=4, backoff=5):
+    """
+    GET with exponential backoff on 429 Too Many Requests.
+    Waits backoff * 2^attempt seconds before each retry.
+    """
+    import time
+    headers = headers or HEADERS
+    for attempt in range(retries + 1):
+        resp = requests.get(url, headers=headers)
+        if resp.status_code == 429:
+            if attempt < retries:
+                wait = backoff * (2 ** attempt)
+                print(f"  [WARN] 429 Too Many Requests — retrying in {wait}s … (attempt {attempt+1}/{retries})")
+                time.sleep(wait)
+                continue
+        return resp
+    return resp  # return last response after exhausting retries
+
 ALL_SECTIONS    = ["sm", "bs", "pl", "cf", "qr", "sh", "gm", "pr", "ti", "eh", "ee", "et", "er", "mc"]
 SCREENER_SECTIONS = ["sm", "bs", "pl", "cf", "qr", "sh", "gm"]
 
@@ -139,11 +158,11 @@ def _resolve(ticker: str):
 
     is_consolidated = 1
     url  = f"https://www.screener.in/company/{slug}/consolidated/"
-    resp = requests.get(url, headers=HEADERS)
+    resp = _get_with_retry(url)
 
     if resp.status_code == 404:
         url  = f"https://www.screener.in/company/{slug}/"
-        resp = requests.get(url, headers=HEADERS)
+        resp = _get_with_retry(url)
         is_consolidated = 0
 
     if resp.status_code != 200:
@@ -174,7 +193,7 @@ def _fetch_schedule(screener_id, parent_name, section):
         f"?parent={encoded}&section={section}&consolidated="
     )
     try:
-        res  = requests.get(url, headers=HEADERS)
+        res  = _get_with_retry(url)
         res.raise_for_status()
         data = res.json()
 
@@ -379,16 +398,99 @@ def extract_growth_metrics(ticker):
 # ❺  Per-section extractors — yfinance
 # ─────────────────────────────────────────────────────────────────
 
+def _resolve_yf_symbol(ticker: str) -> str:
+    """
+    Resolve a ticker string to a live Yahoo Finance symbol.
+
+    Strategy (in order):
+      1. If the caller already supplied an exchange suffix (e.g. 'HDFCBANK.NS',
+         'RELIANCE.BO'), trust it and return as-is.
+      2. Try  TICKER.NS  directly — if yfinance returns price data, use it.
+      3. Fall back to Yahoo Finance's search API
+         (query1.finance.yahoo.com/v1/finance/search) to find the correct
+         current symbol.  Picks the first NSE (.NS) equity result; if none,
+         picks the first BSE (.BO) equity result.
+      4. If everything fails, return TICKER.NS and let the caller handle
+         the empty-data case gracefully.
+
+    This handles mergers / delistings / renames automatically — no static map
+    needed regardless of how many tickers you run.
+    """
+    import yfinance as yf
+
+    raw = ticker.upper().strip()
+
+    # Strip exchange suffix to get the base symbol for searching.
+    # e.g. 'HDFC.NS' -> base='HDFC', 'RELIANCE.BO' -> base='RELIANCE'
+    if "." in raw:
+        base = raw.rsplit(".", 1)[0]
+        suffix_provided = True
+    else:
+        base = raw
+        suffix_provided = False
+
+    # ── Step 1: validate the supplied symbol is actually live ─────────────
+    # Even if the user passed 'HDFC.NS', we must verify it has price data.
+    # HDFC Ltd merged into HDFC Bank in 2023 — HDFC.NS is now dead.
+    if suffix_provided:
+        try:
+            hist = yf.Ticker(raw).history(period="5d", auto_adjust=False)
+            if not hist.empty:
+                return raw          # suffix provided AND data exists — done
+            print(f"  [YF] '{raw}' returned no price data — searching for live symbol …")
+        except Exception:
+            print(f"  [YF] '{raw}' lookup failed — searching for live symbol …")
+
+    # ── Step 2: try BASE.NS directly (for no-suffix callers) ─────────────
+    if not suffix_provided:
+        candidate = base + ".NS"
+        try:
+            hist = yf.Ticker(candidate).history(period="5d", auto_adjust=False)
+            if not hist.empty:
+                return candidate
+        except Exception:
+            pass
+
+    # ── Step 3: Yahoo Finance search API — handles mergers / renames ──────
+    try:
+        search_url = (
+            "https://query1.finance.yahoo.com/v1/finance/search"
+            f"?q={base}&lang=en-US&region=IN&quotesCount=10&newsCount=0"
+        )
+        resp = requests.get(search_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        resp.raise_for_status()
+        quotes = resp.json().get("quotes", [])
+
+        # Prefer NSE equity, then BSE equity
+        ns_hits = [q["symbol"] for q in quotes
+                   if q.get("quoteType") == "EQUITY" and q.get("symbol", "").endswith(".NS")]
+        bo_hits = [q["symbol"] for q in quotes
+                   if q.get("quoteType") == "EQUITY" and q.get("symbol", "").endswith(".BO")]
+
+        resolved = (ns_hits or bo_hits or [None])[0]
+        if resolved:
+            print(f"  [YF] '{raw}' resolved via search → {resolved}")
+            return resolved
+    except Exception as e:
+        print(f"  [YF] Search API failed for '{raw}': {e}")
+
+    # ── Step 4: best-effort fallback ──────────────────────────────────────
+    fallback = base + ".NS"
+    print(f"  [YF] Could not resolve '{raw}'; falling back to {fallback}")
+    return fallback
+
+
 def _yf_ticker(ticker: str):
     """
-    Return a yfinance Ticker object.
-    Appends '.NS' if no exchange suffix is present.
+    Return a yfinance Ticker object for the given ticker.
+    Automatically resolves the correct current Yahoo Finance symbol
+    (handles mergers, delistings, renames) via _resolve_yf_symbol().
     """
     try:
         import yfinance as yf
     except ImportError:
         raise ImportError("yfinance not installed — run: pip install yfinance")
-    sym = ticker if ("." in ticker or ticker.endswith(".BO")) else ticker + ".NS"
+    sym = _resolve_yf_symbol(ticker)
     return yf.Ticker(sym)
 
 
@@ -659,15 +761,52 @@ def _load_result(section: str, result: dict):
 
     elif section == "mc":
         sd = result["snapshot_date"]
-        load_market_indices(DB_CONFIG, result["indices_data"], sd)
-        load_forex_commodities(DB_CONFIG, result["forex_data"], sd)
-        load_rbi_rates(DB_CONFIG, result["rbi_data"])
-        load_macro_indicators(DB_CONFIG, result["indicators_list"])
+        # Each macro sub-loader runs independently so one failure does not
+        # abort the others.  load_rbi_rates has a known KeyError: 0 bug in
+        # macro_loader_mysql.py (line ~136: `last[0]` on a dict row —
+        # fix: change `last[0]` → `last["repo_rate"]` in that file).
+        for fn, args in [
+            (load_market_indices,   (DB_CONFIG, result["indices_data"],    sd)),
+            (load_forex_commodities,(DB_CONFIG, result["forex_data"],       sd)),
+            (load_rbi_rates,        (DB_CONFIG, result["rbi_data"],           )),
+            (load_macro_indicators, (DB_CONFIG, result["indicators_list"],    )),
+        ]:
+            try:
+                fn(*args)
+            except KeyError as e:
+                print(f"  [MACRO] ✗ {fn.__name__} failed — KeyError {e}")
+                print(f"          Fix in macro_loader_mysql.py: change `last[0]`"
+                      f" → `last['repo_rate']` (or use integer index with cursor"
+                      f" dictionary=False)")
+            except Exception as e:
+                print(f"  [MACRO] ✗ {fn.__name__} failed — {e}")
 
 
 # ─────────────────────────────────────────────────────────────────
 # ❼  Per-ticker pipeline runner
 # ─────────────────────────────────────────────────────────────────
+
+def _check_mysql_connection() -> bool:
+    """
+    Attempt a lightweight MySQL connection using DB_CONFIG.
+    Returns True if successful, False otherwise (with a clear error message).
+    Prevents the pipeline from attempting to load every section only to fail
+    with the same connection-refused error each time.
+    """
+    try:
+        import mysql.connector
+        conn = mysql.connector.connect(**DB_CONFIG)
+        conn.close()
+        return True
+    except Exception as e:
+        print(f"\n  [PIPELINE] ✗ Cannot connect to MySQL — load phase will be skipped.")
+        print(f"             {e}")
+        print(f"\n  Fix: make sure MySQL is running on {DB_CONFIG['host']}:{DB_CONFIG['port']}")
+        print(f"       Windows:  net start MySQL80   (run as Administrator)")
+        print(f"       Then ensure the database exists:")
+        print(f"         CREATE DATABASE IF NOT EXISTS {DB_CONFIG['database']} CHARACTER SET utf8mb4;\n")
+        return False
+
 
 def run_pipeline(ticker: str, sections: list):
     start  = datetime.now()
@@ -678,6 +817,11 @@ def run_pipeline(ticker: str, sections: list):
     print(f"  Sections : {[SECTION_LABELS[s] for s in sections]}")
     print(f"{'═'*60}")
 
+    # ── Pre-flight MySQL check: fail fast instead of repeating the error ──
+    mysql_ok = _check_mysql_connection()
+    if not mysql_ok:
+        print(f"  [PIPELINE] Extraction will still run; loading will be skipped.\n")
+
     success, failed = [], []
 
     for sec in sections:
@@ -687,6 +831,11 @@ def run_pipeline(ticker: str, sections: list):
 
             if result is None:
                 print(f"\n  [PIPELINE] ✗ Extraction failed — {label}")
+                failed.append(sec)
+                continue
+
+            if not mysql_ok:
+                print(f"\n  [PIPELINE] ⚠  Skipping load for {label} (MySQL unavailable)")
                 failed.append(sec)
                 continue
 
