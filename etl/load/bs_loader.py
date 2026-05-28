@@ -64,7 +64,7 @@ PARENT_LABEL_MAP: dict[str, str] = {
     # Liabilities
     "Equity Capital":       "equity_capital",
     "Reserves":             "reserves",
-    "Total Equity":         "total_equity",
+    # total_equity column dropped — equity_capital + reserves gives the same figure
     "Borrowings":           "borrowings",
     "Other Liabilities":    "other_liabilities",
     "Total Liabilities":    "total_liabilities",

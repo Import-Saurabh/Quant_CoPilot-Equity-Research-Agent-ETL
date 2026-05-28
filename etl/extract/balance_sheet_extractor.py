@@ -9,6 +9,21 @@ HEADERS = {
     "X-Requested-With": "XMLHttpRequest"
 }
 
+# ── Labels that map to parent columns in balance_sheet ───────────────────────
+# Any row from Screener NOT in this set is an extra/sector-specific line
+# (e.g. Gross NPA %, Net NPA %, Capital Adequacy Ratio) and is routed to
+# balance_sheet_items under the pseudo-parent "Extra Metrics – <label>".
+KNOWN_BS_LABELS = {
+    "Equity Capital", "Reserves",
+    # "Total Equity" intentionally excluded — column dropped from balance_sheet
+    "Borrowings", "Other Liabilities", "Total Liabilities",
+    "Fixed Assets", "CWIP", "Investments", "Other Assets",
+    "Inventories", "Trade Receivables",
+    "Cash Equivalents", "Cash & Equivalents",
+    "Loans & Advances", "Total Assets", "Net Debt",
+}
+
+
 def clean_ticker_for_screener(ticker):
     """
     Removes exchange suffixes like .NS or .BO (e.g., 'HAL.NS' -> 'HAL')
@@ -154,7 +169,6 @@ def fetch_schedule_item(screener_id, parent_name):
 def scrape_balance_sheet(ticker):
     print(f"=== Starting Data Extraction for Ticker: {ticker} ===")
     
-    # Resolve the identity using the robust lookup function
     screener_id, slug = get_screener_id_and_slug(ticker)
     if not screener_id or not slug:
         print(f"[ABORT] Could not resolve identity for {ticker}.\n")
@@ -162,11 +176,9 @@ def scrape_balance_sheet(ticker):
         
     print(f"[SUCCESS] Resolved Screener ID: {screener_id} | Slug: {slug}")
     
-    # Fetch the main company financials page
     company_url = f"https://www.screener.in/company/{slug}/consolidated/"
     response = requests.get(company_url, headers=HEADERS)
     
-    # Fallback to standalone if consolidated doesn't exist
     if response.status_code == 404:
         company_url = f"https://www.screener.in/company/{slug}/"
         response = requests.get(company_url, headers=HEADERS)
@@ -185,11 +197,29 @@ def scrape_balance_sheet(ticker):
     print(f"Timeline Columns: {dates}")
     for label, values in main_rows.items():
         print(f"  {label.ljust(25)}: {values}")
-        
-    # The major categories we want granular schedules for
+
+    # ── Detect extra / sector-specific rows ────────────────────────────────
+    # e.g. Gross NPA %, Net NPA %, Capital Adequacy Ratio for banks/NBFCs.
+    # "Total Equity" is also excluded here since the column has been dropped.
+    extra_rows: dict[str, list] = {}
+    for label in main_rows:
+        if label.strip() not in KNOWN_BS_LABELS:
+            extra_rows[label] = main_rows[label]
+
+    if extra_rows:
+        print("\n--- Extra / Sector-Specific Rows (→ balance_sheet_items) ---")
+        for label, values in extra_rows.items():
+            print(f"  [EXTRA]  {label.ljust(35)}: {values}")
+
+    # ── Standard schedule breakdowns ───────────────────────────────────────
     schedule_parents = ["Borrowings", "Other Liabilities", "Other Assets", "Fixed Assets"]
+    # Also fetch dedicated schedules for every extra row
+    extra_schedule_parents = list(extra_rows.keys())
+
     print("\n--- Child Line Schedule Breakdowns ---")
     
+    all_child_items: dict[str, dict] = {}
+
     for parent in schedule_parents:
         print(f"\nQuerying Sub-Schedule Endpoints for: [{parent}]...")
         child_items = fetch_schedule_item(screener_id, parent)
@@ -197,10 +227,42 @@ def scrape_balance_sheet(ticker):
         if not child_items:
             print(f"  No breakdown sub-items extracted for '{parent}'.")
             continue
-            
+        
+        all_child_items[parent] = child_items
         for child_label, child_values in child_items.items():
-            # Pad the values list to ensure it matches the length of the dates list
             padded_values = (child_values + [None] * len(dates))[:len(dates)]
             print(f"  ↳ {child_label.ljust(35)}: {padded_values}")
-            
+
+    # Extra-row schedules — each stored under "Extra Metrics – <label>"
+    for parent in extra_schedule_parents:
+        print(f"\nQuerying Extra-Row Schedule for: [{parent}]...")
+        child_items = fetch_schedule_item(screener_id, parent)
+        group_key = f"Extra Metrics – {parent}"
+
+        if group_key not in all_child_items:
+            all_child_items[group_key] = {}
+
+        if child_items:
+            all_child_items[group_key].update(child_items)
+            for child_label, child_values in child_items.items():
+                padded_values = (child_values + [None] * len(dates))[:len(dates)]
+                print(f"  ↳ {child_label.ljust(35)}: {padded_values}")
+        else:
+            print(f"  No sub-items; the row value itself will be stored as an item.")
+
+    # Store the top-level extra row value itself as an item so nothing is lost
+    for label, values in extra_rows.items():
+        group_key = f"Extra Metrics – {label}"
+        if group_key not in all_child_items:
+            all_child_items[group_key] = {}
+        all_child_items[group_key].setdefault(label, values)
+
     print("\n=== Extraction Cycle Finished ===\n")
+
+    return {
+        "screener_id": screener_id,
+        "slug":        slug,
+        "dates":       dates,
+        "main_rows":   main_rows,
+        "child_items": all_child_items,
+    }

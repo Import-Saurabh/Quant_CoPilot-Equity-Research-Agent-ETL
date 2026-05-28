@@ -9,9 +9,20 @@ HEADERS = {
     "X-Requested-With": "XMLHttpRequest"
 }
 
-# ==========================================
-# UTILITY FUNCTIONS
-# ==========================================
+# ── Labels that map to parent columns in quarterly_results ───────────────────
+# Any row from Screener NOT in this set is an extra/sector-specific line
+# (e.g. Gross NPA %, Net NPA %) and is routed to quarterly_results_items.
+KNOWN_QR_LABELS = {
+    "Sales", "Revenue", "Expenses", "Operating Profit",
+    "Financing Profit",                    # bank / NBFC alias for Operating Profit
+    "OPM %", "OPM%",
+    "Financing Margin %", "NIM %",         # bank / NBFC alias for OPM %
+    "Other Income", "Interest", "Depreciation",
+    "Profit before tax", "Profit Before Tax",
+    "Tax %", "Net Profit", "EPS in Rs", "EPS",
+    "Raw PDF",                             # always skipped
+}
+
 
 def clean_ticker_for_screener(ticker):
     """Removes exchange suffixes like .NS or .BO."""
@@ -176,30 +187,76 @@ def scrape_quarterly_results(ticker):
     print("\n--- Quarterly Results Parent Rows ---")
     print(f"Timeline Columns: {dates}")
     for label, values in main_rows.items():
-        # Exclude the Raw PDF row from the data matrix
         if "Raw PDF" in label:
             continue
         print(f"  {label.ljust(35)}: {values}")
-        
+
+    # ── Detect extra / sector-specific rows (e.g. Gross NPA %, Net NPA %) ──
+    extra_rows: dict[str, list] = {}
+    for label in main_rows:
+        if label.strip() not in KNOWN_QR_LABELS:
+            extra_rows[label] = main_rows[label]
+
+    if extra_rows:
+        print("\n--- Extra / Sector-Specific Rows (→ quarterly_results_items) ---")
+        for label, values in extra_rows.items():
+            print(f"  [EXTRA]  {label.ljust(40)}: {values}")
+
+    # ── Scheduled child-line breakdowns ────────────────────────────────────
     schedule_parents = ["Expenses", "Other Income", "Net Profit"]
+    # Also fetch dedicated schedules for each extra row
+    extra_schedule_parents = list(extra_rows.keys())
+
     print("\n--- Quarterly Results Child Schedules ---")
     
+    all_child_items: dict[str, dict] = {}
+
     for parent in schedule_parents:
         print(f"\nQuerying: [{parent}]...")
-        # Target the quarters section specifically
         child_items = fetch_schedule_item(screener_id, parent, section="quarters")
         
         if not child_items:
             print(f"  No items for '{parent}'.")
             continue
-            
+        
+        all_child_items[parent] = child_items
         for child_label, child_values in child_items.items():
             padded_values = (child_values + [None] * len(dates))[:len(dates)]
             print(f"  ↳ {child_label.ljust(40)}: {padded_values}")
 
+    # Extra-row schedules — route under "Extra Metrics – <label>" parent
+    for parent in extra_schedule_parents:
+        print(f"\nQuerying Extra-Row Schedule for: [{parent}]...")
+        child_items = fetch_schedule_item(screener_id, parent, section="quarters")
+        group_key = f"Extra Metrics – {parent}"
+
+        if group_key not in all_child_items:
+            all_child_items[group_key] = {}
+
+        if child_items:
+            all_child_items[group_key].update(child_items)
+            for child_label, child_values in child_items.items():
+                padded_values = (child_values + [None] * len(dates))[:len(dates)]
+                print(f"  ↳ {child_label.ljust(40)}: {padded_values}")
+        else:
+            print(f"  No sub-items; the row value itself will be stored as an item.")
+
+    # Merge top-level extra row values as items so the loader receives them
+    for label, values in extra_rows.items():
+        group_key = f"Extra Metrics – {label}"
+        if group_key not in all_child_items:
+            all_child_items[group_key] = {}
+        all_child_items[group_key].setdefault(label, values)
+
+    return {
+        "screener_id": screener_id,
+        "slug":        slug,
+        "dates":       dates,
+        "main_rows":   main_rows,
+        "child_items": all_child_items,
+    }
+
 
 if __name__ == "__main__":
     ticker_to_test = "HAL"
-    
-    # Run the discrete quarterly function
     scrape_quarterly_results(ticker_to_test)

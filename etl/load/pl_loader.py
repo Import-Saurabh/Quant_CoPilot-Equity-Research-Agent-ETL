@@ -53,6 +53,13 @@ PARENT_LABEL_MAP: dict[str, str] = {
     "Revenue":                  "sales",          # alternate label
     "Expenses":                 "expenses",
     "Operating Profit":         "operating_profit",
+    # ── Bank / NBFC / Financial-service aliases ──────────────
+    # Screener shows "Financing Profit" instead of "Operating Profit"
+    # and "Financing Margin %" / "NIM %" instead of "OPM %" for these sectors.
+    "Financing Profit":         "operating_profit",
+    "Financing Margin %":       "opm_pct",
+    "NIM %":                    "opm_pct",
+    # ────────────────────────────────────────────────────────
     "OPM %":                    "opm_pct",
     "OPM%":                     "opm_pct",
     "Other Income":             "other_income",

@@ -9,6 +9,20 @@ HEADERS = {
     "X-Requested-With": "XMLHttpRequest"
 }
 
+# ── Labels that map to parent columns in profit_loss ─────────────────────────
+# Any row from Screener NOT in this set is treated as an extra/sector-specific
+# line (e.g. Gross NPA %, Net NPA %) and routed to profit_loss_items instead.
+KNOWN_PL_LABELS = {
+    "Sales", "Revenue", "Expenses", "Operating Profit",
+    "Financing Profit",                    # bank / NBFC alias for Operating Profit
+    "OPM %", "OPM%",
+    "Financing Margin %", "NIM %",         # bank / NBFC alias for OPM %
+    "Other Income", "Interest", "Depreciation",
+    "Profit before tax", "Profit Before Tax",
+    "Tax %", "Net Profit", "EPS in Rs", "EPS",
+    "Dividend Payout %", "Raw PDF",        # Raw PDF is always skipped
+}
+
 def clean_ticker_for_screener(ticker):
     """Removes exchange suffixes like .NS or .BO (e.g., 'HAL.NS' -> 'HAL')"""
     cleaned = ticker.upper().strip()
@@ -159,14 +173,12 @@ def scrape_profit_loss(ticker):
         response = requests.get(company_url, headers=HEADERS)
         
     soup = BeautifulSoup(response.content, "html.parser")
-    # Target the Profit & Loss section specifically
     pl_section = soup.find("section", id="profit-loss")
     
     if not pl_section:
         print("[ERROR] Could not find Profit & Loss section on this page.")
         return
         
-    # The primary financial grid is usually the first table with class 'data-table'
     table = pl_section.find("table", class_="data-table")
     dates, main_rows = parse_html_table(table)
     
@@ -174,26 +186,83 @@ def scrape_profit_loss(ticker):
     print(f"Timeline Columns: {dates}")
     for label, values in main_rows.items():
         print(f"  {label.ljust(25)}: {values}")
-        
-    # The major P&L categories we want granular schedules for
+
+    # ── Detect extra / sector-specific rows (e.g. Gross NPA %, Net NPA %) ──
+    # These don't belong to any parent-column in profit_loss, so we collect
+    # them and push them straight to profit_loss_items under the pseudo-parent
+    # label "Extra Metrics".
+    extra_rows: dict[str, list] = {}
+    for label in main_rows:
+        if label.strip() not in KNOWN_PL_LABELS:
+            extra_rows[label] = main_rows[label]
+
+    if extra_rows:
+        print("\n--- Extra / Sector-Specific Rows (→ profit_loss_items) ---")
+        for label, values in extra_rows.items():
+            print(f"  [EXTRA]  {label.ljust(35)}: {values}")
+
+    # ── Scheduled child-line breakdowns ────────────────────────────────────
+    # Standard expandable schedules (Expenses, Other Income, Net Profit).
+    # For each extra row we also try a dedicated schedule call so that any
+    # sub-items (e.g. breakdown of Gross NPA) are captured in items too.
     schedule_parents = ["Expenses", "Other Income", "Net Profit"]
+
+    # Also attempt schedule fetch for every extra row label
+    extra_schedule_parents = list(extra_rows.keys())
+
     print("\n--- Child Line Schedule Breakdowns ---")
     
+    all_child_items: dict[str, dict] = {}
+
     for parent in schedule_parents:
         print(f"\nQuerying Sub-Schedule Endpoints for: [{parent}]...")
-        # Note: Passing section="profit-loss" here
         child_items = fetch_schedule_item(screener_id, parent, section="profit-loss")
         
         if not child_items:
             print(f"  No breakdown sub-items extracted for '{parent}'.")
             continue
             
+        all_child_items[parent] = child_items
         for child_label, child_values in child_items.items():
             padded_values = (child_values + [None] * len(dates))[:len(dates)]
             print(f"  ↳ {child_label.ljust(35)}: {padded_values}")
+
+    # Extra-row schedules — route under "Extra Metrics" parent
+    for parent in extra_schedule_parents:
+        print(f"\nQuerying Extra-Row Schedule for: [{parent}]...")
+        child_items = fetch_schedule_item(screener_id, parent, section="profit-loss")
+        group_key = f"Extra Metrics – {parent}"
+        
+        # Always store the top-level extra row value itself as an item
+        if parent not in all_child_items:
+            all_child_items[group_key] = {}
+
+        if child_items:
+            all_child_items[group_key].update(child_items)
+            for child_label, child_values in child_items.items():
+                padded_values = (child_values + [None] * len(dates))[:len(dates)]
+                print(f"  ↳ {child_label.ljust(40)}: {padded_values}")
+        else:
+            print(f"  No sub-items; the row value itself will be stored as an item.")
+
+    # Merge top-level extra row values into all_child_items so the loader
+    # receives them as child rows with parent = "Extra Metrics – <label>"
+    for label, values in extra_rows.items():
+        group_key = f"Extra Metrics – {label}"
+        if group_key not in all_child_items:
+            all_child_items[group_key] = {}
+        # Store the raw value under the label itself as the item key
+        all_child_items[group_key].setdefault(label, values)
             
     print("\n=== P&L Extraction Cycle Finished ===\n")
 
+    return {
+        "screener_id": screener_id,
+        "slug":        slug,
+        "dates":       dates,
+        "main_rows":   main_rows,
+        "child_items": all_child_items,
+    }
 if __name__ == "__main__":
     # Test execution for Hindustan Aeronautics Limited
     scrape_profit_loss("HAL")
