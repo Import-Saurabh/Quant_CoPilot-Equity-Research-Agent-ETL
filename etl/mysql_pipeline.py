@@ -866,6 +866,10 @@ def run_pipeline(ticker: str, sections: list):
         print(f"  ✗ FAILED: {[SECTION_LABELS[s] for s in failed]}")
     print(f"{'─'*60}\n")
 
+    # Return structured result so callers (e.g. pipeline_service) can inspect
+    # which sections succeeded / failed without parsing stdout.
+    return {"success": success, "failed": failed}
+
 
 # ─────────────────────────────────────────────────────────────────
 # ❽  CLI entry point
