@@ -9,3 +9,21 @@ venv
 graphify-out
 *.json
 *.log
+tests/
+docs/
+*.md
+htmlcov/
+.coverage
+.DS_Store
+Thumbs.db
+.venv/
+venv/
+env/
+ENV/
+ 
+# Git
+.git/
+.gitignore
+.idea/
+.vscode/
+*.swp
