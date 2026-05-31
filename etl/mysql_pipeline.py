@@ -92,11 +92,11 @@ from extract.my_corporate_actions import scrape_corporate_actions
 # ❶  MySQL connection config — edit before running
 # ─────────────────────────────────────────────────────────────────
 DB_CONFIG = {
-    "host":       "localhost",
-    "port":       3306,
-    "database":   "ai_hedge_fund",
-    "user":       "root",           # ← change
-    "password":   "Avinash18",      # ← change
+    "host":       os.getenv("DB_HOST",     "localhost"),
+    "port":       int(os.getenv("DB_PORT", "3306")),
+    "database":   os.getenv("DB_NAME",     "ai_hedge_fund"),
+    "user":       os.getenv("DB_USER",     "root"),
+    "password":   os.getenv("DB_PASSWORD", ""),
     "charset":    "utf8mb4",
     "autocommit": False,
 }
