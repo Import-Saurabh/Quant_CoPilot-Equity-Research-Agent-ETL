@@ -18,9 +18,11 @@ KNOWN_BS_LABELS = {
     # "Total Equity" intentionally excluded — column dropped from balance_sheet
     "Borrowings", "Other Liabilities", "Total Liabilities",
     "Fixed Assets", "CWIP", "Investments", "Other Assets",
-    "Inventories", "Trade Receivables",
+    # "Inventories" intentionally excluded — routed to balance_sheet_items
+    # "Trade Receivables" intentionally excluded — routed to balance_sheet_items
     "Cash Equivalents", "Cash & Equivalents",
-    "Loans & Advances", "Total Assets", "Net Debt",
+    # "Loans & Advances" intentionally excluded — routed to balance_sheet_items
+    "Total Assets", "Net Debt",
 }
 
 
@@ -212,7 +214,11 @@ def scrape_balance_sheet(ticker):
             print(f"  [EXTRA]  {label.ljust(35)}: {values}")
 
     # ── Standard schedule breakdowns ───────────────────────────────────────
-    schedule_parents = ["Borrowings", "Other Liabilities", "Other Assets", "Fixed Assets"]
+    schedule_parents = [
+        "Borrowings", "Other Liabilities", "Other Assets", "Fixed Assets",
+        # Inventories, Trade Receivables, Loans & Advances stored as items
+        "Inventories", "Trade Receivables", "Loans & Advances",
+    ]
     # Also fetch dedicated schedules for every extra row
     extra_schedule_parents = list(extra_rows.keys())
 

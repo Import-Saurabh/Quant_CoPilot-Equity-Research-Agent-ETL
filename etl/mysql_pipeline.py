@@ -292,7 +292,12 @@ def extract_balance_sheet(ticker):
     _print_fetched("Balance Sheet", symbol, is_consolidated, dates, main_rows)
     child_items = _collect_children(
         screener_id,
-        ["Borrowings", "Other Liabilities", "Other Assets", "Fixed Assets"],
+        [
+            "Borrowings", "Other Liabilities", "Other Assets", "Fixed Assets",
+            # Inventories, Trade Receivables, Loans & Advances have no parent
+            # columns; stored entirely via balance_sheet_items.
+            "Inventories", "Trade Receivables", "Loans & Advances",
+        ],
         "balance-sheet",
     )
     _print_children(child_items, dates)

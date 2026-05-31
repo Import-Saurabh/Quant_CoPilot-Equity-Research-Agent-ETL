@@ -73,8 +73,7 @@ PARENT_LABEL_MAP: dict[str, str] = {
     "CWIP":                 "cwip",
     "Investments":          "investments",
     "Other Assets":         "other_assets",
-    "Inventories":          "inventories",
-    "Trade Receivables":    "trade_receivables",
+    # "Inventories" and "Trade Receivables" routed to balance_sheet_items
     "Cash Equivalents":     "cash_equivalents",
     "Cash & Equivalents":   "cash_equivalents",
     "Loans & Advances":     "loans_advances",
@@ -86,7 +85,7 @@ PARENT_LABEL_MAP: dict[str, str] = {
 UNIVERSAL_COLS = [
     "equity_capital", "reserves", "borrowings",
     "total_liabilities", "fixed_assets", "total_assets",
-    "cash_equivalents",
+    "cash_equivalents", "net_debt",
 ]
 
 
@@ -287,6 +286,19 @@ def load_balance_sheet(
             if screener_label in main_rows:
                 vals = main_rows[screener_label]
                 col_values[col_name] = vals[col_idx] if col_idx < len(vals) else None
+
+        # ── Net Debt fallback: compute when Screener does not provide it ──
+        # net_debt = total_borrowings – cash_equivalents
+        # Only compute when the scraped value is truly absent/None.
+        if col_values.get("net_debt") is None:
+            borrowings_val = col_values.get("borrowings")
+            cash_val       = col_values.get("cash_equivalents")
+            if borrowings_val is not None and cash_val is not None:
+                col_values["net_debt"] = round(
+                    float(borrowings_val) - float(cash_val), 2
+                )
+                print(f"  [NET DEBT] Computed for {period_end}: "
+                      f"{borrowings_val} - {cash_val} = {col_values['net_debt']}")
 
         upsert_balance_sheet_parent(
             cursor, symbol, period_end, is_consolidated, col_values
