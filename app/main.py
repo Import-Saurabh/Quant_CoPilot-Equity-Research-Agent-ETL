@@ -53,7 +53,7 @@ async def lifespan(app: FastAPI):
     logger.info("MinIO access key: %s", os.getenv("MINIO_ACCESS_KEY", "minioadmin"))
 
     try:
-        from etl.loaders.minio_loader import ping_minio
+        from etl.load.minio_loader import ping_minio
         if ping_minio():
             logger.info("MinIO ✓ reachable at %s", minio_endpoint)
         else:

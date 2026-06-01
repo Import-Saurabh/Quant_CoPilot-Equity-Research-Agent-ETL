@@ -1,4 +1,3 @@
-
 # ─────────────────────────────────────────────────────────────────────────────
 # Quant Copilot – docker compose stack
 #
@@ -38,6 +37,7 @@ services:
 
       # Auto-run schema on fresh DB creation
       - ./database/mysql_schema_v2.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./database/minio_init.sql:/docker-entrypoint-initdb.d/02_minio.sql:ro
 
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
@@ -75,6 +75,16 @@ services:
       DB_NAME: ${DB_NAME}
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
+
+      # MinIO — S3 API is on 9000 (console/UI is on 9001)
+      # If MinIO runs in a separate container on the same Docker host use:
+      #   MINIO_ENDPOINT: host.docker.internal:9000
+      # If you add MinIO to this compose file use its service name:
+      #   MINIO_ENDPOINT: minio:9000
+      MINIO_ENDPOINT:   ${MINIO_ENDPOINT:-host.docker.internal:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_SECURE:     ${MINIO_SECURE:-false}
 
     ports:
       - "${API_HOST_PORT:-8000}:8000"
@@ -120,4 +130,3 @@ volumes:
 networks:
   quant_net:
     driver: bridge
-

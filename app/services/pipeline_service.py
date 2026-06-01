@@ -16,7 +16,7 @@ from etl.mysql_pipeline import (
     run_pipeline,
 )
 from etl.extract.balance_sheet_extractor import clean_ticker_for_screener
-from etl.services.doc_pipeline_service import run_doc_pipeline
+from etl.doc_pipeline_service import run_doc_pipeline
 
 logger = logging.getLogger(__name__)
 
