@@ -9,6 +9,7 @@ Production features included here:
   • Global exception handler so unhandled errors never leak tracebacks
   • /health exposed at root level (in addition to the router's /health)
   • Lifespan context manager for startup / shutdown hooks
+    – logs MinIO connectivity on startup
   • Uvicorn launch block for `python main.py` convenience
 """
 
@@ -45,7 +46,27 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Run startup tasks before yield; shutdown tasks after."""
     logger.info("═══ Quant Copilot API starting up ═══")
+
+    # ── MinIO connectivity check ──────────────────────────────────────────
+    minio_endpoint = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+    logger.info("MinIO endpoint  : %s", minio_endpoint)
+    logger.info("MinIO access key: %s", os.getenv("MINIO_ACCESS_KEY", "minioadmin"))
+
+    try:
+        from etl.loaders.minio_loader import ping_minio
+        if ping_minio():
+            logger.info("MinIO ✓ reachable at %s", minio_endpoint)
+        else:
+            logger.warning(
+                "MinIO ✗ NOT reachable at %s — /ingest-docs will fail until "
+                "the container is up and MINIO_ENDPOINT is correct.",
+                minio_endpoint,
+            )
+    except Exception as exc:
+        logger.warning("MinIO probe error: %s", exc)
+
     yield
+
     logger.info("═══ Quant Copilot API shut down ════")
 
 
@@ -55,17 +76,16 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Quant Copilot Equity Research Agent",
-    version="2.0.0",
+    version="2.1.0",
     description=(
         "ETL pipeline API that scrapes Screener.in + yfinance and loads "
-        "financial data into a MySQL database for quantitative research."
+        "financial data into MySQL, and ingests annual report / concall "
+        "PDFs into MinIO with metadata tracked in MySQL."
     ),
     lifespan=lifespan,
 )
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
-# Set ALLOWED_ORIGINS env var to a comma-separated list of origins in production.
-# Default is open (fine for internal / local use; tighten for public deployment).
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
 _origins = [o.strip() for o in _raw_origins.split(",") if o.strip()]
 

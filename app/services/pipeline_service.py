@@ -1,15 +1,10 @@
 """
 pipeline_service.py
 ───────────────────
-Thin service layer that bridges the FastAPI layer to mysql_pipeline.run_pipeline().
+Thin service layer that bridges the FastAPI layer to both ETL pipelines:
 
-Responsibilities
-  • Validate / normalise the ticker symbol
-  • Accept an optional list of section codes; default = ALL_SECTIONS
-  • Capture per-section success / failure from run_pipeline and return a
-    structured PipelineResponse instead of relying on print() side-effects
-  • Surface a clean ValueError for bad input and let exceptions from the
-    pipeline propagate so the router can map them to HTTP status codes
+  • execute_pipeline()     → MySQL financial data ETL  (Screener + yfinance)
+  • execute_doc_pipeline() → PDF document ingestion    (Screener → MinIO → MySQL)
 """
 
 import logging
@@ -21,9 +16,14 @@ from etl.mysql_pipeline import (
     run_pipeline,
 )
 from etl.extract.balance_sheet_extractor import clean_ticker_for_screener
+from etl.services.doc_pipeline_service import run_doc_pipeline
 
 logger = logging.getLogger(__name__)
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Financial data ETL  (unchanged from v1)
+# ─────────────────────────────────────────────────────────────────────────────
 
 def execute_pipeline(
     symbol: str,
@@ -70,8 +70,7 @@ def execute_pipeline(
 
     result = run_pipeline(symbol, resolved_sections)
 
-    # ── 4. run_pipeline returns a summary dict (see updated mysql_pipeline) ──
-    #    { "success": [...], "failed": [...] }
+    # ── 4. run_pipeline returns { "success": [...], "failed": [...] } ─────
     sections_ok     = result.get("success", [])
     sections_failed = result.get("failed",  [])
 
@@ -93,7 +92,10 @@ def execute_pipeline(
         message_parts.append(f"Failed: {failed_labels}.")
     message = " ".join(message_parts)
 
-    logger.info("Pipeline %s for %s | ok=%s failed=%s", status, symbol, sections_ok, sections_failed)
+    logger.info(
+        "Pipeline %s for %s | ok=%s failed=%s",
+        status, symbol, sections_ok, sections_failed,
+    )
 
     return {
         "status":           status,
@@ -102,3 +104,45 @@ def execute_pipeline(
         "sections_ok":      sections_ok,
         "sections_failed":  sections_failed,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Document ingestion pipeline  (Screener → MinIO → MySQL)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def execute_doc_pipeline(symbol: str) -> dict:
+    """
+    Scrape Screener.in for annual reports & concall transcripts,
+    upload each PDF to MinIO, and save metadata to MySQL pdf_documents.
+
+    Parameters
+    ----------
+    symbol : Raw ticker string, e.g. "TCS", "RELIANCE".
+
+    Returns
+    -------
+    dict compatible with DocIngestResponse schema:
+        status   – "success" | "partial" | "failed"
+        symbol   – normalised ticker
+        message  – human-readable summary
+        total    – total docs found on Screener.in
+        uploaded – list of MinIO object paths that succeeded
+        failed   – list of document titles that could not be processed
+    """
+    symbol = symbol.strip().upper()
+    if not symbol:
+        raise ValueError("Ticker symbol cannot be empty.")
+
+    logger.info("Starting document ingestion for %s", symbol)
+
+    result = run_doc_pipeline(symbol)
+
+    logger.info(
+        "Doc pipeline %s for %s | uploaded=%d failed=%d",
+        result["status"],
+        symbol,
+        len(result["uploaded"]),
+        len(result["failed"]),
+    )
+
+    return result
