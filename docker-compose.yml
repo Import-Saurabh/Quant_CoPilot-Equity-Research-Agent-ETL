@@ -2,14 +2,16 @@
 # Quant Copilot – docker compose stack
 #
 # Services
-#   api      – FastAPI application
 #   db       – MySQL 8.0
-#   adminer  – optional DB GUI
+#   minio    – MinIO object storage (PDFs)
+#   api      – FastAPI application
+#   adminer  – optional DB GUI      (docker compose --profile tools up)
+#   mc       – MinIO bucket init    (docker compose --profile tools up)
 #
 # Start:
 #   docker compose up --build -d
 #
-# Start with Adminer:
+# Start with Adminer + MinIO Console:
 #   docker compose --profile tools up --build -d
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -23,8 +25,6 @@ services:
 
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-
-      # Uses DB_* variables from .env
       MYSQL_DATABASE: ${DB_NAME}
       MYSQL_USER: ${DB_USER}
       MYSQL_PASSWORD: ${DB_PASSWORD}
@@ -34,8 +34,6 @@ services:
 
     volumes:
       - mysql_data:/var/lib/mysql
-
-      # Auto-run schema on fresh DB creation
       - ./database/mysql_schema_v2.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
       - ./database/minio_init.sql:/docker-entrypoint-initdb.d/02_minio.sql:ro
 
@@ -44,6 +42,35 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+    networks:
+      - quant_net
+
+  # ── MinIO Object Storage ─────────────────────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: quant_minio
+    restart: unless-stopped
+
+    command: server /data --console-address ":9001"
+
+    environment:
+      MINIO_ROOT_USER:     ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+
+    ports:
+      - "${MINIO_API_PORT:-9000}:9000"      # S3 API  – used by the Python SDK
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"  # Web UI  – open http://localhost:9001
+
+    volumes:
+      - minio_data:/data
+
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
     networks:
       - quant_net
@@ -61,6 +88,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      minio:
+        condition: service_healthy
 
     environment:
       # Server
@@ -69,28 +98,23 @@ services:
       RELOAD: "false"
       ALLOWED_ORIGINS: "${ALLOWED_ORIGINS:-*}"
 
-      # Database connection
+      # Database
       DB_HOST: db
       DB_PORT: "3306"
       DB_NAME: ${DB_NAME}
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
 
-      # MinIO — S3 API is on 9000 (console/UI is on 9001)
-      # If MinIO runs in a separate container on the same Docker host use:
-      #   MINIO_ENDPOINT: host.docker.internal:9000
-      # If you add MinIO to this compose file use its service name:
-      #   MINIO_ENDPOINT: minio:9000
-      MINIO_ENDPOINT:   ${MINIO_ENDPOINT:-host.docker.internal:9000}
+      # MinIO — use container name "minio" as host since both are on quant_net
+      MINIO_ENDPOINT:   minio:9000
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
-      MINIO_SECURE:     ${MINIO_SECURE:-false}
+      MINIO_SECURE:     "false"
 
     ports:
       - "${API_HOST_PORT:-8000}:8000"
 
     volumes:
-      # Remove :ro if hot reload/write access needed
       - .:/app:ro
 
     healthcheck:
@@ -103,14 +127,12 @@ services:
     networks:
       - quant_net
 
-  # ── Adminer (Optional) ───────────────────────────────────────────────────
+  # ── Adminer – optional DB GUI ────────────────────────────────────────────
   adminer:
     image: adminer:latest
     container_name: quant_adminer
     restart: unless-stopped
-
-    profiles:
-      - tools
+    profiles: [tools]
 
     depends_on:
       - db
@@ -121,12 +143,14 @@ services:
     networks:
       - quant_net
 
-# ── Persistent Volumes ─────────────────────────────────────────────────────
+# ── Persistent Volumes ──────────────────────────────────────────────────────
 volumes:
   mysql_data:
     driver: local
+  minio_data:
+    driver: local
 
-# ── Docker Network ─────────────────────────────────────────────────────────
+# ── Docker Network ───────────────────────────────────────────────────────────
 networks:
   quant_net:
     driver: bridge
