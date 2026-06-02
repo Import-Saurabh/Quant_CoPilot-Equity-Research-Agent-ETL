@@ -20,11 +20,13 @@ import io
 import os
 import re
 import logging
+import time
 import requests
 from minio import Minio
 from minio.error import S3Error
 
 logger = logging.getLogger(__name__)
+DEBUG_LOG_PATH = "debug-02716c.log"
 
 # ── Bucket names per doc_type ─────────────────────────────────────────────────
 BUCKET_MAP = {
@@ -34,6 +36,25 @@ BUCKET_MAP = {
 
 # ── Lazy MinIO singleton ──────────────────────────────────────────────────────
 _client: Minio | None = None
+
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    # #region agent log
+    try:
+        import json
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "sessionId": "02716c",
+                "runId": run_id,
+                "hypothesisId": hypothesis_id,
+                "location": location,
+                "message": message,
+                "data": data,
+                "timestamp": int(time.time() * 1000),
+            }, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+    # #endregion
 
 
 def get_client() -> Minio:
@@ -78,6 +99,16 @@ def _safe_name(s: str) -> str:
     return re.sub(r"[^\w\-_.]", "_", s)[:80]
 
 
+def _is_probable_pdf_url(url: str) -> bool:
+    lowered = url.lower()
+    if ".pdf" in lowered:
+        return True
+    # Known non-direct UI routes from TCS pages
+    if "#type=overlay" in lowered or "overlay" in lowered:
+        return False
+    return False
+
+
 # ── Public upload function ────────────────────────────────────────────────────
 
 def upload_document(doc: dict, session: requests.Session) -> str | None:
@@ -104,13 +135,41 @@ def upload_document(doc: dict, session: requests.Session) -> str | None:
     bucket   = BUCKET_MAP.get(dtype, "other-documents")
     obj_name = f"{symbol}/{year}_{title}.pdf"           # path inside the bucket
 
+    if not _is_probable_pdf_url(url):
+        _debug_log(
+            "pre-fix",
+            "H3",
+            "etl/load/minio_loader.py:125",
+            "Skipped non-direct/non-PDF URL before download",
+            {"url": url, "doc_type": dtype, "title": doc.get("title", "")},
+        )
+        logger.warning("Skipped %s — not a direct PDF URL", url)
+        return None
+
     # ── 1. Stream PDF bytes ───────────────────────────────────────────────────
     try:
-        dl_headers = {}
+        dl_headers = {
+            "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+        }
         if "bseindia.com" in url:
             dl_headers["Referer"] = "https://www.bseindia.com/"
         elif "nseindia.com" in url:
             dl_headers["Referer"] = "https://www.nseindia.com/"
+        elif "tcs.com" in url:
+            dl_headers["Referer"] = "https://www.tcs.com/investor-relations/financial-statements"
+
+        _debug_log(
+            "pre-fix",
+            "H3",
+            "etl/load/minio_loader.py:152",
+            "Downloading document URL",
+            {"url": url, "headers_set": sorted(list(dl_headers.keys()))},
+        )
 
         resp = session.get(url, headers=dl_headers, timeout=60, stream=True)
         resp.raise_for_status()
@@ -127,6 +186,13 @@ def upload_document(doc: dict, session: requests.Session) -> str | None:
             return None
 
     except Exception as exc:
+        _debug_log(
+            "pre-fix",
+            "H3",
+            "etl/load/minio_loader.py:169",
+            "Document download failed",
+            {"url": url, "error": str(exc)},
+        )
         logger.error("Download failed for %s: %s", url, exc)
         return None
 

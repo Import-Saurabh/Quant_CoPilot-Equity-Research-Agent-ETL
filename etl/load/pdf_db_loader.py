@@ -12,6 +12,27 @@ import logging
 import mysql.connector
 
 logger = logging.getLogger(__name__)
+DEBUG_LOG_PATH = "debug-02716c.log"
+
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    # #region agent log
+    try:
+        import json
+        import time
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "sessionId": "02716c",
+                "runId": run_id,
+                "hypothesisId": hypothesis_id,
+                "location": location,
+                "message": message,
+                "data": data,
+                "timestamp": int(time.time() * 1000),
+            }, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+    # #endregion
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -43,6 +64,13 @@ def load_pdf_document(
     True on success, False on failure (error is logged).
     """
     company_id = _get_company_id(db_config, symbol)   # best-effort; may be None
+    _debug_log(
+        "pre-fix",
+        "H2",
+        "etl/load/pdf_db_loader.py:66",
+        "Resolved company id before pdf_documents upsert",
+        {"symbol": symbol, "doc_type": doc_type, "fiscal_year": fiscal_year, "company_id": company_id},
+    )
 
     sql = """
         INSERT INTO pdf_documents
@@ -73,9 +101,23 @@ def load_pdf_document(
         cursor.close()
         conn.close()
         logger.debug("Saved pdf_document: %s / %s / %s", symbol, doc_type, fiscal_year)
+        _debug_log(
+            "pre-fix",
+            "H1",
+            "etl/load/pdf_db_loader.py:100",
+            "pdf_documents upsert succeeded",
+            {"symbol": symbol, "doc_type": doc_type, "fiscal_year": fiscal_year, "file_name": file_name},
+        )
         return True
 
     except Exception as exc:
+        _debug_log(
+            "pre-fix",
+            "H1",
+            "etl/load/pdf_db_loader.py:111",
+            "pdf_documents upsert failed",
+            {"symbol": symbol, "doc_type": doc_type, "fiscal_year": fiscal_year, "error": str(exc)},
+        )
         logger.error(
             "DB insert failed for %s / %s / %s: %s",
             symbol, doc_type, fiscal_year, exc,
@@ -97,12 +139,26 @@ def _get_company_id(db_config: dict, symbol: str) -> int | None:
         conn   = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id FROM stocks_master WHERE symbol = %s LIMIT 1",
+            "SELECT id FROM stocks WHERE symbol = %s LIMIT 1",
             (symbol,),
         )
         row = cursor.fetchone()
         cursor.close()
         conn.close()
+        _debug_log(
+            "pre-fix",
+            "H2",
+            "etl/load/pdf_db_loader.py:142",
+            "Company lookup from stocks completed",
+            {"symbol": symbol, "found": bool(row)},
+        )
         return row[0] if row else None
-    except Exception:
+    except Exception as exc:
+        _debug_log(
+            "pre-fix",
+            "H2",
+            "etl/load/pdf_db_loader.py:151",
+            "Company lookup failed",
+            {"symbol": symbol, "error": str(exc)},
+        )
         return None

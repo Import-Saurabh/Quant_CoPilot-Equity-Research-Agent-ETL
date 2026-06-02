@@ -18,6 +18,7 @@ from etl.load.pdf_db_loader import load_pdf_document
 from etl.mysql_pipeline import DB_CONFIG
 
 logger = logging.getLogger(__name__)
+DEBUG_LOG_PATH = "debug-02716c.log"
 
 _SCRAPER_HEADERS = {
     "User-Agent": (
@@ -27,7 +28,26 @@ _SCRAPER_HEADERS = {
     ),
 }
 
-_CRAWL_DELAY_S = 1.0     # seconds between PDF downloads — stay polite
+_CRAWL_DELAY_S = 5.0     # seconds between PDF downloads — stay polite
+
+
+def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    # #region agent log
+    try:
+        import json
+        with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps({
+                "sessionId": "02716c",
+                "runId": run_id,
+                "hypothesisId": hypothesis_id,
+                "location": location,
+                "message": message,
+                "data": data,
+                "timestamp": int(time.time() * 1000),
+            }, ensure_ascii=True) + "\n")
+    except Exception:
+        pass
+    # #endregion
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -56,6 +76,13 @@ def run_doc_pipeline(symbol: str) -> dict:
     }
     """
     symbol = symbol.strip().upper()
+    _debug_log(
+        "pre-fix",
+        "H4",
+        "etl/doc_pipeline_service.py:80",
+        "Doc pipeline started",
+        {"symbol": symbol},
+    )
 
     # ── Pre-flight: MinIO reachability ────────────────────────────────────────
     if not ping_minio():
@@ -111,7 +138,7 @@ def run_doc_pipeline(symbol: str) -> dict:
         if object_path:
             file_name = object_path.split("/")[-1]
 
-            load_pdf_document(
+            db_saved = load_pdf_document(
                 db_config   = DB_CONFIG,
                 symbol      = symbol,
                 doc_type    = doc["doc_type"],
@@ -119,7 +146,17 @@ def run_doc_pipeline(symbol: str) -> dict:
                 file_name   = file_name,
                 object_path = object_path,
             )
-            uploaded.append(object_path)
+            if db_saved:
+                uploaded.append(object_path)
+            else:
+                failed_titles.append(doc.get("title", "unknown"))
+                _debug_log(
+                    "pre-fix",
+                    "H4",
+                    "etl/doc_pipeline_service.py:151",
+                    "DB save failed after upload; marking doc as failed",
+                    {"symbol": symbol, "object_path": object_path, "title": doc.get("title", "unknown")},
+                )
         else:
             failed_titles.append(doc.get("title", "unknown"))
 
