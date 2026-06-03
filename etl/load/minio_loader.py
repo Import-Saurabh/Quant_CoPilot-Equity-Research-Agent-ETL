@@ -26,7 +26,7 @@ from minio import Minio
 from minio.error import S3Error
 
 logger = logging.getLogger(__name__)
-DEBUG_LOG_PATH = "debug-02716c.log"
+DEBUG_LOG_PATH = "debug-597278.log"
 
 # ── Bucket names per doc_type ─────────────────────────────────────────────────
 BUCKET_MAP = {
@@ -44,7 +44,7 @@ def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, dat
         import json
         with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps({
-                "sessionId": "02716c",
+                "sessionId": "597278",
                 "runId": run_id,
                 "hypothesisId": hypothesis_id,
                 "location": location,
@@ -100,13 +100,16 @@ def _safe_name(s: str) -> str:
 
 
 def _is_probable_pdf_url(url: str) -> bool:
+    """
+    Return False only for known non-PDF destinations (YouTube, empty href).
+    Overlay and filing URLs are resolved to a direct PDF before download.
+    """
     lowered = url.lower()
-    if ".pdf" in lowered:
-        return True
-    # Known non-direct UI routes from TCS pages
-    if "#type=overlay" in lowered or "overlay" in lowered:
+    if not lowered.startswith("http"):
         return False
-    return False
+    if "youtube.com" in lowered or "youtu.be" in lowered:
+        return False
+    return True
 
 
 # ── Public upload function ────────────────────────────────────────────────────
@@ -126,7 +129,9 @@ def upload_document(doc: dict, session: requests.Session) -> str | None:
     object_path (str)  — e.g. "annual-reports/tcs/2024_TCS_Annual_Report.pdf"
     None               — on any download or upload failure (already logged).
     """
-    url      = doc["url"]
+    from etl.extract.screener_downloader import resolve_pdf_url
+
+    url      = resolve_pdf_url(doc["url"], session) or doc["url"]
     dtype    = doc["doc_type"]                          # "annual_report" | "concall"
     year     = str(doc.get("year") or "unknown")
     symbol   = doc.get("symbol", "unknown").lower()
@@ -168,7 +173,11 @@ def upload_document(doc: dict, session: requests.Session) -> str | None:
             "H3",
             "etl/load/minio_loader.py:152",
             "Downloading document URL",
-            {"url": url, "headers_set": sorted(list(dl_headers.keys()))},
+            {
+                "url": url,
+                "original_url": doc["url"][:200],
+                "headers_set": sorted(list(dl_headers.keys())),
+            },
         )
 
         resp = session.get(url, headers=dl_headers, timeout=60, stream=True)

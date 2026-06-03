@@ -18,7 +18,7 @@ from etl.load.pdf_db_loader import load_pdf_document
 from etl.mysql_pipeline import DB_CONFIG
 
 logger = logging.getLogger(__name__)
-DEBUG_LOG_PATH = "debug-02716c.log"
+DEBUG_LOG_PATH = "debug-597278.log"
 
 _SCRAPER_HEADERS = {
     "User-Agent": (
@@ -37,7 +37,7 @@ def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, dat
         import json
         with open(DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
             f.write(json.dumps({
-                "sessionId": "02716c",
+                "sessionId": "597278",
                 "runId": run_id,
                 "hypothesisId": hypothesis_id,
                 "location": location,
@@ -124,7 +124,19 @@ def run_doc_pipeline(symbol: str) -> dict:
             message=f"No documents (annual reports / concalls) found for '{symbol}'.",
         )
 
-    logger.info("%d document(s) found for %s", len(docs), symbol)
+    annual_n = sum(1 for d in docs if d["doc_type"] == "annual_report")
+    concall_n = sum(1 for d in docs if d["doc_type"] == "concall")
+    logger.info(
+        "%d document(s) found for %s (%d annual, %d concall)",
+        len(docs), symbol, annual_n, concall_n,
+    )
+    _debug_log(
+        "pre-fix",
+        "H1",
+        "etl/doc_pipeline_service.py:131",
+        "Extracted document counts by type",
+        {"symbol": symbol, "total": len(docs), "annual": annual_n, "concall": concall_n},
+    )
 
     # ── 2. Upload each doc → MinIO + MySQL ────────────────────────────────────
     uploaded:      list[str] = []
@@ -134,6 +146,20 @@ def run_doc_pipeline(symbol: str) -> dict:
         doc["symbol"] = symbol          # needed by minio_loader for object path
 
         object_path = upload_document(doc, session)
+
+        _debug_log(
+            "pre-fix",
+            "H2",
+            "etl/doc_pipeline_service.py:145",
+            "Upload attempt finished",
+            {
+                "symbol": symbol,
+                "doc_type": doc.get("doc_type"),
+                "title": doc.get("title", "unknown"),
+                "url": doc.get("url", "")[:200],
+                "success": bool(object_path),
+            },
+        )
 
         if object_path:
             file_name = object_path.split("/")[-1]
