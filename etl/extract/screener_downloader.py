@@ -1,4 +1,5 @@
 import argparse
+import random
 import re
 import time
 from pathlib import Path
@@ -40,6 +41,10 @@ _MONTH_YEAR_RE = re.compile(
     r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\s+(20\d{2})\b",
     re.I,
 )
+
+# Retry delays (seconds) on 403 / 429 — applied with random jitter (×0.8–1.4).
+# Three attempts total: immediate → 15 s → 45 s → 120 s.
+_RETRY_DELAYS = [15, 45, 120]
 
 
 # ─────────────────────────────────────────────
@@ -293,10 +298,22 @@ def extract_documents(soup, page_url):
 
 
 # ─────────────────────────────────────────────
-# Download (ROBUST)
+# Download (ROBUST — retry + jitter on 403/429)
 # ─────────────────────────────────────────────
 def safe_name(s):
     return re.sub(r"[^\w\-_. ]", "_", s)[:100]
+
+
+def _build_referer(url: str) -> str:
+    """Return an appropriate Referer header value for the given PDF host."""
+    if "bseindia.com" in url:
+        return "https://www.bseindia.com/"
+    if "nseindia.com" in url:
+        return "https://www.nseindia.com/"
+    if "tcs.com" in url:
+        return "https://www.tcs.com/investor-relations/financial-statements"
+    # Screener-hosted PDFs and everything else
+    return "https://www.screener.in/"
 
 
 def download_pdf(session, doc, out_root):
@@ -307,46 +324,57 @@ def download_pdf(session, doc, out_root):
 
     dest = out_root / dtype / year
     dest.mkdir(parents=True, exist_ok=True)
-
     fpath = dest / f"{year}_{title}.pdf"
 
     print(f"[↓] {dtype} {year} {title}")
 
-    try:
-        headers = session.headers.copy()
+    headers = dict(session.headers)
+    headers["Referer"] = _build_referer(url)
 
-        if "bseindia.com" in url:
-            headers["Referer"] = "https://www.bseindia.com/"
-        elif "nseindia.com" in url:
-            headers["Referer"] = "https://www.nseindia.com/"
-        elif "tcs.com" in url:
-            headers["Referer"] = "https://www.tcs.com/investor-relations/financial-statements"
+    # Attempt 0 is immediate; subsequent attempts wait _RETRY_DELAYS[i-1] seconds
+    # with multiplicative jitter so burst traffic is naturally spread out.
+    delays = [0] + _RETRY_DELAYS
+    for attempt, base_wait in enumerate(delays):
+        if base_wait:
+            jitter = random.uniform(0.8, 1.4)
+            wait = base_wait * jitter
+            print(f"    [{attempt}/{len(_RETRY_DELAYS)}] waiting {wait:.0f}s before retry…")
+            time.sleep(wait)
 
-        r = session.get(url, timeout=60, stream=True, headers=headers)
-        r.raise_for_status()
+        try:
+            r = session.get(url, timeout=60, stream=True, headers=headers)
 
-        content_type = r.headers.get("Content-Type", "")
-        if "html" in content_type.lower():
-            print("    skipped (HTML page)")
-            return False
+            if r.status_code in (403, 429):
+                print(f"    HTTP {r.status_code} on {url[:120]} — will retry")
+                continue          # back to top of loop for next retry
 
-        with open(fpath, "wb") as f:
-            for chunk in r.iter_content(65536):
-                f.write(chunk)
+            r.raise_for_status()
 
-        size_kb = fpath.stat().st_size // 1024
+            content_type = r.headers.get("Content-Type", "")
+            if "html" in content_type.lower():
+                print("    skipped (HTML page, not a PDF)")
+                return False
 
-        if size_kb < 10:
-            fpath.unlink(missing_ok=True)
-            print("    skipped (too small)")
-            return False
+            with open(fpath, "wb") as f:
+                for chunk in r.iter_content(65536):
+                    f.write(chunk)
 
-        print(f"    saved ({size_kb} KB)")
-        return True
+            size_kb = fpath.stat().st_size // 1024
+            if size_kb < 10:
+                fpath.unlink(missing_ok=True)
+                print("    skipped (file too small, likely an error page)")
+                return False
 
-    except Exception as e:
-        print(f"    failed: {e}")
-        return False
+            print(f"    saved ({size_kb} KB)")
+            return True
+
+        except Exception as e:
+            print(f"    error on attempt {attempt}: {e}")
+            if attempt == len(_RETRY_DELAYS):
+                return False   # exhausted retries
+
+    print("    failed after all retries")
+    return False
 
 
 # ─────────────────────────────────────────────
@@ -356,6 +384,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("symbol")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument(
+        "--delay",
+        type=float,
+        default=2.0,
+        help="Base inter-document delay in seconds (actual = delay × random 0.8-1.6)",
+    )
     args = ap.parse_args()
 
     symbol = args.symbol.upper()
@@ -386,16 +420,20 @@ def main():
     success = 0
     fail = 0
 
-    for doc in docs:
+    for i, doc in enumerate(docs):
         if download_pdf(session, doc, out_dir):
             success += 1
         else:
             fail += 1
-        time.sleep(1.5)
+
+        # Randomised inter-document delay — avoids uniform timing fingerprint.
+        if i < len(docs) - 1:
+            sleep_for = args.delay * random.uniform(0.8, 1.6)
+            time.sleep(sleep_for)
 
     print("\n==============================")
     print(f"Downloaded: {success}")
-    print(f"Failed: {fail}")
+    print(f"Failed:     {fail}")
     print("==============================\n")
 
 

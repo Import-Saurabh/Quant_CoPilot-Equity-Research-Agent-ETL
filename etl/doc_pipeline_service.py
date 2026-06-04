@@ -9,6 +9,7 @@ Called by app/services/pipeline_service.py → execute_doc_pipeline().
 """
 
 import logging
+import random
 import time
 import requests
 
@@ -28,7 +29,10 @@ _SCRAPER_HEADERS = {
     ),
 }
 
-_CRAWL_DELAY_S = 5.0     # seconds between PDF downloads — stay polite
+# Inter-document crawl delay: actual sleep = uniform(CRAWL_DELAY_MIN, CRAWL_DELAY_MAX).
+# Randomised bounds prevent the uniform-interval timing signature that CDNs detect.
+_CRAWL_DELAY_MIN = 6.0
+_CRAWL_DELAY_MAX = 14.0
 
 
 def _debug_log(run_id: str, hypothesis_id: str, location: str, message: str, data: dict) -> None:
@@ -142,7 +146,7 @@ def run_doc_pipeline(symbol: str) -> dict:
     uploaded:      list[str] = []
     failed_titles: list[str] = []
 
-    for doc in docs:
+    for i, doc in enumerate(docs):
         doc["symbol"] = symbol          # needed by minio_loader for object path
 
         object_path = upload_document(doc, session)
@@ -186,7 +190,10 @@ def run_doc_pipeline(symbol: str) -> dict:
         else:
             failed_titles.append(doc.get("title", "unknown"))
 
-        time.sleep(_CRAWL_DELAY_S)
+        # Randomised inter-document delay — avoids the uniform-interval timing
+        # fingerprint that CDN rate-limiters use to detect bots.
+        if i < len(docs) - 1:
+            time.sleep(random.uniform(_CRAWL_DELAY_MIN, _CRAWL_DELAY_MAX))
 
     # ── 3. Compose result ─────────────────────────────────────────────────────
     total = len(docs)
