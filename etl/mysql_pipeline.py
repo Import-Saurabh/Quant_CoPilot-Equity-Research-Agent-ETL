@@ -3,12 +3,10 @@ mysql_pipeline.py  –  Full Screener + yfinance ETL Pipeline  (v3)
 ==================================================================
 Changes vs v2:
   • New sections added:  price (pr), technical (ti),
-                         earnings history/estimates (eh/ee),
-                         eps trend / revisions (et/er),
                          macro (mc)
   • All yfinance-backed loaders now use the *_mysql variants
     (price_loader_mysql, technical_loader_mysql,
-     earnings_loader_mysql, macro_loader_mysql) which target
+     macro_loader_mysql) which target
      mysql_schema_v2.sql with correct MySQL syntax & column sets.
   • DB_CONFIG passed explicitly into every loader (no global
     get_connection() relying on a SQLite path).
@@ -28,10 +26,6 @@ Section codes:
     sh  = Shareholding
     pr  = Price Daily          (yfinance)
     ti  = Technical Indicators (yfinance + pandas_ta/manual)
-    eh  = Earnings History     (yfinance)
-    ee  = Earnings Estimates   (yfinance)
-    et  = EPS Trend            (yfinance)
-    er  = EPS Revisions        (yfinance)
     mc  = Macro (indices/forex/RBI/indicators)
     ca  = Corporate Actions    (yfinance — dividends & splits)
 
@@ -73,12 +67,6 @@ from extract.stocks_mysql import scrape_stock_master_details
 from load.price_loader_mysql     import load_price
 from load.technical_loader_mysql import load_technicals
 from load.technical_loader       import compute_technicals   # DB-agnostic
-from load.earnings_loader_mysql  import (
-    load_earnings_history,
-    load_earnings_estimates,
-    load_eps_trend,
-    load_eps_revisions,
-)
 from load.macro_loader_mysql import (
     load_market_indices,
     load_forex_commodities,
@@ -129,7 +117,7 @@ def _get_with_retry(url, headers=None, retries=4, backoff=5):
         return resp
     return resp  # return last response after exhausting retries
 
-ALL_SECTIONS    = ["sm", "bs", "pl", "cf", "qr", "sh", "gm", "pr", "ti", "eh", "ee", "et", "er", "mc", "ca"]
+ALL_SECTIONS    = ["sm", "bs", "pl", "cf", "qr", "sh", "gm", "pr", "ti", "mc", "ca"]
 SCREENER_SECTIONS = ["sm", "bs", "pl", "cf", "qr", "sh", "gm"]
 
 SECTION_LABELS = {
@@ -142,10 +130,6 @@ SECTION_LABELS = {
     "gm": "Growth Metrics",
     "pr": "Price Daily",
     "ti": "Technical Indicators",
-    "eh": "Earnings History",
-    "ee": "Earnings Estimates",
-    "et": "EPS Trend",
-    "er": "EPS Revisions",
     "mc": "Macro",
     "ca": "Corporate Actions",
 }
@@ -549,111 +533,6 @@ def extract_technicals(ticker):
     return dict(symbol=price_result["symbol"], df=df_tech)
 
 
-def extract_earnings_history(ticker):
-    print(f"\n  ▶ Extracting Earnings History …")
-    symbol = clean_ticker_for_screener(ticker)
-    try:
-        yt   = _yf_ticker(ticker)
-        data = yt.earnings_history          # DataFrame or None
-        if data is None or (hasattr(data, "empty") and data.empty):
-            print(f"  ⚠  earnings_history: no data for {ticker}")
-            return None
-        records = []
-        for _, row in data.iterrows():
-            records.append({
-                "quarter_end":    str(row.get("quarter", ""))[:10],
-                "eps_actual":     row.get("epsActual"),
-                "eps_estimate":   row.get("epsEstimate"),
-                "eps_difference": row.get("epsDifference"),
-                "surprise_pct":   row.get("surprisePercent"),
-            })
-        return dict(symbol=symbol, records=records)
-    except Exception as e:
-        print(f"  [ERROR] extract_earnings_history: {e}")
-        return None
-
-
-def extract_earnings_estimates(ticker):
-    print(f"\n  ▶ Extracting Earnings Estimates …")
-    symbol    = clean_ticker_for_screener(ticker)
-    snap_date = date.today().isoformat()
-    try:
-        yt   = _yf_ticker(ticker)
-        data = yt.earnings_estimate         # DataFrame or None
-        if data is None or (hasattr(data, "empty") and data.empty):
-            print(f"  ⚠  earnings_estimates: no data for {ticker}")
-            return None
-        records = []
-        for period_code, row in data.iterrows():
-            records.append({
-                "snapshot_date": snap_date,
-                "period_code":   str(period_code),
-                "avg_eps":       row.get("avg"),
-                "low_eps":       row.get("low"),
-                "high_eps":      row.get("high"),
-                "year_ago_eps":  row.get("yearAgoEps"),
-                "analyst_count": row.get("numberOfAnalysts"),
-                "growth_pct":    row.get("growth"),
-            })
-        return dict(symbol=symbol, records=records)
-    except Exception as e:
-        print(f"  [ERROR] extract_earnings_estimates: {e}")
-        return None
-
-
-def extract_eps_trend(ticker):
-    print(f"\n  ▶ Extracting EPS Trend …")
-    symbol    = clean_ticker_for_screener(ticker)
-    snap_date = date.today().isoformat()
-    try:
-        yt   = _yf_ticker(ticker)
-        data = yt.eps_trend                 # DataFrame or None
-        if data is None or (hasattr(data, "empty") and data.empty):
-            print(f"  ⚠  eps_trend: no data for {ticker}")
-            return None
-        records = []
-        for period_code, row in data.iterrows():
-            records.append({
-                "snapshot_date":   snap_date,
-                "period_code":     str(period_code),
-                "current_est":     row.get("current"),
-                "seven_days_ago":  row.get("7daysAgo"),
-                "thirty_days_ago": row.get("30daysAgo"),
-                "sixty_days_ago":  row.get("60daysAgo"),
-                "ninety_days_ago": row.get("90daysAgo"),
-            })
-        return dict(symbol=symbol, records=records)
-    except Exception as e:
-        print(f"  [ERROR] extract_eps_trend: {e}")
-        return None
-
-
-def extract_eps_revisions(ticker):
-    print(f"\n  ▶ Extracting EPS Revisions …")
-    symbol    = clean_ticker_for_screener(ticker)
-    snap_date = date.today().isoformat()
-    try:
-        yt   = _yf_ticker(ticker)
-        data = yt.eps_revisions             # DataFrame or None
-        if data is None or (hasattr(data, "empty") and data.empty):
-            print(f"  ⚠  eps_revisions: no data for {ticker}")
-            return None
-        records = []
-        for period_code, row in data.iterrows():
-            records.append({
-                "snapshot_date":  snap_date,
-                "period_code":    str(period_code),
-                "up_last_7d":     row.get("upLast7days"),
-                "up_last_30d":    row.get("upLast30days"),
-                "down_last_30d":  row.get("downLast30days"),
-                "down_last_7d":   row.get("downLast7days"),
-            })
-        return dict(symbol=symbol, records=records)
-    except Exception as e:
-        print(f"  [ERROR] extract_eps_revisions: {e}")
-        return None
-
-
 def extract_macro(_ticker):
     """
     Macro is not ticker-specific.
@@ -700,10 +579,6 @@ SECTION_EXTRACT = {
     "gm": extract_growth_metrics,
     "pr": extract_price,
     "ti": extract_technicals,
-    "eh": extract_earnings_history,
-    "ee": extract_earnings_estimates,
-    "et": extract_eps_trend,
-    "er": extract_eps_revisions,
     "mc": extract_macro,
     "ca": scrape_corporate_actions,
 }
@@ -756,18 +631,6 @@ def _load_result(section: str, result: dict):
 
     elif section == "ti":
         load_technicals(DB_CONFIG, result["df"], result["symbol"])
-
-    elif section == "eh":
-        load_earnings_history(DB_CONFIG, result["records"], result["symbol"])
-
-    elif section == "ee":
-        load_earnings_estimates(DB_CONFIG, result["records"], result["symbol"])
-
-    elif section == "et":
-        load_eps_trend(DB_CONFIG, result["records"], result["symbol"])
-
-    elif section == "er":
-        load_eps_revisions(DB_CONFIG, result["records"], result["symbol"])
 
     elif section == "mc":
         sd = result["snapshot_date"]
