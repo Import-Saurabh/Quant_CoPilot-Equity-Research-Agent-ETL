@@ -242,7 +242,7 @@ def load_quarterly_results(db_config, symbol, dates, main_rows,
                 value = vals[col_idx] if col_idx < len(vals) else None
                 _upsert_item(cursor, symbol, period_end, is_consolidated,
                              parent_label, child_label,
-                             _clean_value(value), sort_idx, "screener")
+                             _clean_pct(value), sort_idx, "screener")
                 inserted_child += 1
 
     conn.commit()

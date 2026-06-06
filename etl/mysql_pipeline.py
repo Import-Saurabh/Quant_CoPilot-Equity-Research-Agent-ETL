@@ -195,7 +195,18 @@ def _fetch_schedule(screener_id, parent_name, section):
         elif isinstance(data, dict):
             result = {}
             for k, v in data.items():
-                result[k.strip()] = [v[kk] for kk in sorted(v.keys())]
+                # Sort date keys chronologically, not alphabetically.
+                # "Dec 2023" < "Jun 2023" alphabetically but Jun comes first.
+                def _parse_date_key(s):
+                    for fmt in ("%b %Y", "%b-%y", "%b-%Y", "%Y-%m-%d"):
+                        try:
+                            return datetime.strptime(s.strip(), fmt)
+                        except ValueError:
+                            continue
+                    return s  # fallback: preserve original order for unparseable keys
+
+                sorted_keys = sorted(v.keys(), key=_parse_date_key)
+                result[k.strip()] = [v[kk] for kk in sorted_keys]
             return result
         return {}
     except Exception as e:
@@ -333,6 +344,21 @@ def extract_cash_flow(ticker):
                 dates=dates, main_rows=main_rows, child_items=child_items)
 
 
+# Labels that map to parent columns in quarterly_results.
+# Any row from Screener NOT in this set is sector-specific
+# (e.g. Gross NPA %, Net NPA %) and belongs in quarterly_results_items.
+_KNOWN_QR_LABELS = {
+    "Sales", "Revenue", "Expenses", "Operating Profit",
+    "Financing Profit",
+    "OPM %", "OPM%",
+    "Financing Margin %", "NIM %",
+    "Other Income", "Interest", "Depreciation",
+    "Profit before tax", "Profit Before Tax",
+    "Tax %", "Net Profit", "EPS in Rs", "EPS",
+    "Raw PDF",
+}
+
+
 def extract_quarterly_results(ticker):
     print(f"\n  ▶ Extracting Quarterly Results …")
     screener_id, slug, is_consolidated, soup = _resolve(ticker)
@@ -344,11 +370,41 @@ def extract_quarterly_results(ticker):
     main_rows = {k: v for k, v in main_rows.items() if "Raw PDF" not in k}
     symbol = clean_ticker_for_screener(ticker)
     _print_fetched("Quarterly Results", symbol, is_consolidated, dates, main_rows)
+
+    # ── Standard schedule children ────────────────────────────────
     child_items = _collect_children(
         screener_id,
         ["Expenses", "Other Income", "Net Profit"],
         "quarters",
     )
+
+    # ── Extra / sector-specific rows (e.g. Gross NPA %, Net NPA %) ──
+    # These are not mapped to parent columns, so they must be stored
+    # as items in quarterly_results_items.
+    extra_rows = {
+        label: vals
+        for label, vals in main_rows.items()
+        if label.strip() not in _KNOWN_QR_LABELS
+    }
+
+    if extra_rows:
+        print(f"\n  Extra / sector-specific rows detected: {list(extra_rows.keys())}")
+
+    for label, vals in extra_rows.items():
+        group_key = f"Extra Metrics – {label}"
+
+        # Try fetching a schedule breakdown for this row
+        schedule_rows = _fetch_schedule(screener_id, label, "quarters")
+
+        if group_key not in child_items:
+            child_items[group_key] = {}
+
+        if schedule_rows:
+            child_items[group_key].update(schedule_rows)
+        else:
+            # No sub-breakdown — store the row's own values as a single item
+            child_items[group_key].setdefault(label, vals)
+
     _print_children(child_items, dates)
     return dict(symbol=symbol, is_consolidated=is_consolidated,
                 dates=dates, main_rows=main_rows, child_items=child_items)
