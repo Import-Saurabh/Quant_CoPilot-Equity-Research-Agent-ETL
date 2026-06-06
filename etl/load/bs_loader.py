@@ -76,7 +76,7 @@ PARENT_LABEL_MAP: dict[str, str] = {
     # "Inventories" and "Trade Receivables" routed to balance_sheet_items
     "Cash Equivalents":     "cash_equivalents",
     "Cash & Equivalents":   "cash_equivalents",
-    "Loans & Advances":     "loans_advances",
+    # "Loans & Advances" column dropped from balance_sheet — routed to balance_sheet_items
     "Total Assets":         "total_assets",
     "Net Debt":             "net_debt",
 }
