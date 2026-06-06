@@ -12,6 +12,7 @@ from typing import List, Optional
 
 from etl.mysql_pipeline import (
     ALL_SECTIONS,
+    SCREENER_SECTIONS,
     SECTION_LABELS,
     run_pipeline,
 )
@@ -55,7 +56,7 @@ def execute_pipeline(
 
     # ── 2. Resolve section list ──────────────────────────────────────────
     if not sections:
-        resolved_sections = ALL_SECTIONS
+        resolved_sections = list(ALL_SECTIONS)
     else:
         invalid = [s for s in sections if s not in ALL_SECTIONS]
         if invalid:
@@ -63,7 +64,16 @@ def execute_pipeline(
                 f"Invalid section code(s): {invalid}. "
                 f"Valid codes are: {ALL_SECTIONS}"
             )
-        resolved_sections = sections
+        resolved_sections = list(sections)
+
+    # ── 2b. Always populate stocks master first ───────────────────────────
+    # Any Screener section writes a bare INSERT IGNORE for the stock row.
+    # Without sm running first, name/screener_id/sector stay NULL forever.
+    if "sm" not in resolved_sections and any(
+        s in SCREENER_SECTIONS for s in resolved_sections
+    ):
+        resolved_sections = ["sm"] + resolved_sections
+        logger.info("Auto-prepended 'sm' to populate stocks master for %s", symbol)
 
     # ── 3. Run the pipeline ───────────────────────────────────────────────
     logger.info("Starting pipeline for %s | sections=%s", symbol, resolved_sections)

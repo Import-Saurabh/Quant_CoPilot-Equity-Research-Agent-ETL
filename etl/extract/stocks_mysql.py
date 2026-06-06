@@ -97,7 +97,17 @@ def scrape_stock_master_details(ticker):
         return None
 
     soup = BeautifulSoup(response.content, "html.parser")
-    
+
+    # --- 0. Extract Company Name ---
+    company_name = None
+    h1 = soup.find("h1")
+    if h1:
+        # Screener renders: <h1 class="h2">Hindustan Aeronautics <span>HAL</span></h1>
+        # Strip the ticker span so we keep only the full company name.
+        for span in h1.find_all("span"):
+            span.decompose()
+        company_name = h1.get_text(strip=True) or None
+
     # --- 1. Extract Industry Hierarchy ---
     hierarchy = {
         "Broad Sector": None,
@@ -139,15 +149,16 @@ def scrape_stock_master_details(ticker):
 
     # Compile the final dictionary matching your database needs
     master_data = {
-        "symbol": clean_ticker_for_screener(ticker),
-        "screener_id": screener_id,
-        "broad_sector": hierarchy.get("Broad Sector"),
-        "sector": hierarchy.get("Sector"),
+        "symbol":        clean_ticker_for_screener(ticker),
+        "screener_id":   screener_id,
+        "name":          company_name,
+        "broad_sector":  hierarchy.get("Broad Sector"),
+        "sector":        hierarchy.get("Sector"),
         "broad_industry": hierarchy.get("Broad Industry"),
-        "industry": hierarchy.get("Industry"),
+        "industry":      hierarchy.get("Industry"),
         "market_cap_cr": ratios.get("Market Cap"),
         "current_price": ratios.get("Current Price"),
-        "stock_pe": ratios.get("Stock P/E")
+        "stock_pe":      ratios.get("Stock P/E"),
     }
 
     return master_data

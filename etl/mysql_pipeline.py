@@ -744,6 +744,14 @@ def run_pipeline(ticker: str, sections: list):
     start  = datetime.now()
     symbol = clean_ticker_for_screener(ticker)
 
+    # Auto-prepend Stock Master so the stocks row is always fully
+    # populated before any other section writes data.
+    # Only injected when at least one Screener section is requested
+    # and sm isn't already in the list.
+    if "sm" not in sections and any(s in SCREENER_SECTIONS for s in sections):
+        sections = ["sm"] + [s for s in sections if s != "sm"]
+        print(f"  [PIPELINE] Auto-prepending 'sm' to populate stocks table.")
+
     print(f"\n{'═'*60}")
     print(f"  PIPELINE  ·  {symbol}")
     print(f"  Sections : {[SECTION_LABELS[s] for s in sections]}")
