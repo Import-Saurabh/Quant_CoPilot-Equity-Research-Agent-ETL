@@ -1,0 +1,231 @@
+
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:0}
+.wrap{padding:1.25rem 0;font-size:14px;line-height:1.6;color:var(--color-text-primary)}
+.method-legend{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:1.25rem}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:500;padding:3px 10px;border-radius:20px;cursor:pointer;border:0.5px solid transparent;transition:opacity .15s}
+.pill:hover{opacity:.8}
+.pill-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.section-label{font-size:11px;font-weight:500;color:var(--color-text-secondary);letter-spacing:.06em;text-transform:uppercase;margin:1.25rem 0 .6rem}
+.method-card{border-radius:var(--border-radius-lg);border:0.5px solid var(--color-border-tertiary);margin-bottom:.875rem;overflow:hidden}
+.method-head{display:flex;align-items:center;gap:10px;padding:.75rem 1rem;cursor:pointer;user-select:none}
+.method-head:hover{background:var(--color-background-secondary)}
+.method-icon{width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:15px}
+.method-name{font-size:14px;font-weight:500;flex:1}
+.method-sub{font-size:12px;color:var(--color-text-secondary)}
+.chevron{font-size:14px;color:var(--color-text-secondary);transition:transform .2s;margin-left:auto}
+.method-body{padding:0 1rem 1rem;display:none}
+.method-body.open{display:block}
+.features-used{display:flex;flex-wrap:wrap;gap:5px;margin:.5rem 0}
+.ftag{font-size:11px;padding:2px 7px;border-radius:10px;font-weight:500}
+.impl-box{background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:.75rem;margin:.5rem 0;font-size:13px}
+.impl-box code{font-family:var(--font-mono);font-size:12px;background:var(--color-background-tertiary);padding:1px 5px;border-radius:4px}
+.warn-box{border-radius:var(--border-radius-md);padding:.75rem;margin:.5rem 0;font-size:13px}
+p{margin:.4rem 0}
+ul{margin:.3rem 0 .3rem 1rem;padding:0}
+li{margin-bottom:.2rem}
+.feature-grid{display:grid;grid-template-columns:1fr;gap:6px;margin:.75rem 0}
+.frow{display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;align-items:start;padding:.5rem .75rem;background:var(--color-background-secondary);border-radius:var(--border-radius-md);font-size:12px}
+.frow-head{display:grid;grid-template-columns:2fr 1fr 1fr;gap:8px;padding:.25rem .75rem;font-size:11px;font-weight:500;color:var(--color-text-secondary);letter-spacing:.04em;text-transform:uppercase}
+.fnum{font-size:10px;font-weight:500;padding:1px 5px;border-radius:8px;margin-right:4px}
+.v1b{background:#E6F1FB;color:#0C447C}
+.v2b{background:#EAF3DE;color:#27500A}
+.v3b{background:#F1EFE8;color:#5F5E5A}
+.skip-card{border-radius:var(--border-radius-lg);border:0.5px solid var(--color-border-danger);padding:1rem;margin-bottom:.875rem}
+</style>
+<div class="wrap">
+<h2 class="sr-only">AI method mapping for Quant Copilot features</h2>
+
+<div class="method-legend">
+  <span class="pill" style="background:#F1EFE8;border-color:#B4B2A9;color:#2C2C2A" onclick="expand('m0')"><span class="pill-dot" style="background:#888780"></span>Pure SQL</span>
+  <span class="pill" style="background:#E6F1FB;border-color:#85B7EB;color:#042C53" onclick="expand('m1')"><span class="pill-dot" style="background:#378ADD"></span>Structured extraction</span>
+  <span class="pill" style="background:#EEEDFE;border-color:#AFA9EC;color:#26215C" onclick="expand('m2')"><span class="pill-dot" style="background:#7F77DD"></span>Document RAG</span>
+  <span class="pill" style="background:#E1F5EE;border-color:#5DCAA5;color:#04342C" onclick="expand('m3')"><span class="pill-dot" style="background:#1D9E75"></span>Multi-doc RAG</span>
+  <span class="pill" style="background:#FAEEDA;border-color:#EF9F27;color:#412402" onclick="expand('m4')"><span class="pill-dot" style="background:#BA7517"></span>Agentic pipeline</span>
+</div>
+
+<div class="section-label">Feature → method map</div>
+<div class="frow-head">
+  <div>Feature</div>
+  <div>Method</div>
+  <div>Phase</div>
+</div>
+<div class="feature-grid">
+  <div class="frow"><div><span class="fnum v1b">1</span>Financial change detection</div><div style="color:#888780;font-weight:500">Pure SQL</div><div><span style="background:#E6F1FB;color:#0C447C;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:500">v1</span></div></div>
+  <div class="frow"><div><span class="fnum v1b">2</span>Peer comparison grid</div><div style="color:#888780;font-weight:500">Pure SQL</div><div><span style="background:#E6F1FB;color:#0C447C;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:500">v1</span></div></div>
+  <div class="frow"><div><span class="fnum v1b">3</span>PDF section navigator</div><div style="color:#7F77DD;font-weight:500">Document RAG</div><div><span style="background:#E6F1FB;color:#0C447C;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:500">v1</span></div></div>
+  <div class="frow"><div><span class="fnum v1b">4</span>Concall structured extractor</div><div style="color:#378ADD;font-weight:500">Struct. extraction</div><div><span style="background:#E6F1FB;color:#0C447C;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:500">v1</span></div></div>
+  <div class="frow"><div><span class="fnum v1b">5</span>Concall diff (QvQ)</div><div style="color:#888780;font-weight:500">SQL + Python diff</div><div><span style="background:#E6F1FB;color:#0C447C;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:500">v1</span></div></div>
+  <div class="frow"><div><span class="fnum v1b">6</span>Data conflict flag</div><div style="color:#888780;font-weight:500">Pure SQL</div><div><span style="background:#E6F1FB;color:#0C447C;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:500">v1</span></div></div>
+  <div class="frow"><div><span class="fnum v1b">7</span>Data freshness indicator</div><div style="color:#888780;font-weight:500">Metadata tracking</div><div><span style="background:#E6F1FB;color:#0C447C;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:500">v1</span></div></div>
+  <div class="frow"><div><span class="fnum v2b">8</span>Evidence finder</div><div style="color:#1D9E75;font-weight:500">Multi-doc RAG</div><div><span style="background:#EAF3DE;color:#27500A;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:500">v2</span></div></div>
+  <div class="frow"><div><span class="fnum v2b">9</span>Guidance accuracy tracker</div><div style="color:#378ADD;font-weight:500">Struct. extraction + SQL</div><div><span style="background:#EAF3DE;color:#27500A;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:500">v2</span></div></div>
+  <div class="frow"><div><span class="fnum v2b">10</span>Sector intelligence feed</div><div style="color:#BA7517;font-weight:500">Agentic pipeline</div><div><span style="background:#EAF3DE;color:#27500A;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:500">v2</span></div></div>
+  <div class="frow"><div><span class="fnum v2b">11</span>Research workspace</div><div style="color:#888780;font-weight:500">Application layer</div><div><span style="background:#EAF3DE;color:#27500A;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:500">v2</span></div></div>
+  <div class="frow"><div><span class="fnum v3b">12</span>Draft section assistant</div><div style="color:#BA7517;font-weight:500">Agentic + generation</div><div><span style="background:#F1EFE8;color:#5F5E5A;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:500">v3</span></div></div>
+  <div class="frow"><div><span class="fnum v3b">13</span>Shareholding divergence</div><div style="color:#888780;font-weight:500">Pure SQL</div><div><span style="background:#F1EFE8;color:#5F5E5A;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:500">v3</span></div></div>
+  <div class="frow"><div><span class="fnum v3b">14</span>API layer</div><div style="color:#888780;font-weight:500">Engineering only</div><div><span style="background:#F1EFE8;color:#5F5E5A;padding:1px 6px;border-radius:8px;font-size:11px;font-weight:500">v3</span></div></div>
+</div>
+
+<div class="section-label">Methods — click to expand</div>
+
+<div class="method-card" id="m0">
+  <div class="method-head" onclick="toggle('m0')">
+    <div class="method-icon" style="background:#F1EFE8"><i class="ti ti-database" style="color:#5F5E5A;font-size:15px" aria-hidden="true"></i></div>
+    <div><div class="method-name">Pure SQL / rule-based</div><div class="method-sub">Features 1, 2, 5, 6, 7, 13 — no AI at all</div></div>
+    <i class="ti ti-chevron-down chevron" id="ic-m0" aria-hidden="true"></i>
+  </div>
+  <div class="method-body" id="b-m0">
+    <p>Seven of your fourteen features need zero AI. This is intentional and correct — these features are about arithmetic and joins, not language understanding.</p>
+    <div class="impl-box">
+      <p style="font-weight:500;margin-bottom:6px">Change detection (feature 1) — example query pattern</p>
+      <p><code>SELECT metric, curr_val, prev_val, (curr_val - prev_val)/prev_val * 100 AS pct_delta FROM screener_quarterly WHERE ticker = 'TCS' ORDER BY period DESC LIMIT 2</code></p>
+      <p style="margin-top:8px">Run this for every metric column. Store deltas in a <code>metric_deltas</code> table. No LLM involved.</p>
+    </div>
+    <div class="impl-box">
+      <p style="font-weight:500;margin-bottom:6px">Data conflict flag (feature 6)</p>
+      <p>When your annual report extractor writes a value to <code>doc_extracted_metrics</code>, run a comparison job against the corresponding Screener row. If <code>abs(doc_val - screener_val) / screener_val > 0.02</code> (2% tolerance), insert a conflict record. Display both sources to the analyst. No model needed.</p>
+    </div>
+    <ul>
+      <li>Use your existing MySQL. No new infrastructure.</li>
+      <li>These features should ship before any AI feature goes live.</li>
+      <li>Speed: sub-100ms response. AI features will be 2-10 seconds. Lead with SQL.</li>
+    </ul>
+  </div>
+</div>
+
+<div class="method-card" id="m1">
+  <div class="method-head" onclick="toggle('m1')">
+    <div class="method-icon" style="background:#E6F1FB"><i class="ti ti-file-text" style="color:#185FA5;font-size:15px" aria-hidden="true"></i></div>
+    <div><div class="method-name">LLM structured extraction</div><div class="method-sub">Features 4, 9 — extraction with a schema, not free generation</div></div>
+    <i class="ti ti-chevron-down chevron" id="ic-m1" aria-hidden="true"></i>
+  </div>
+  <div class="method-body" id="b-m1">
+    <p>This is not RAG. You are sending document text directly to the LLM and asking it to return structured JSON matching a predefined schema. No vector database, no retrieval step, no embedding. The LLM is acting as a parser, not a generator.</p>
+    <div class="impl-box">
+      <p style="font-weight:500;margin-bottom:6px">Concall extraction schema (feature 4)</p>
+      <p>Define a Pydantic model:</p>
+      <p><code>class ConcallExtract(BaseModel):<br>&nbsp;&nbsp;guidance: list[GuidanceItem]<br>&nbsp;&nbsp;risks: list[str]<br>&nbsp;&nbsp;capex_statements: list[CapexItem]<br>&nbsp;&nbsp;hiring_commentary: list[str]</code></p>
+      <p style="margin-top:8px">Send the full concall text (most concalls are 15-40 pages, under 32k tokens) with instruction: <em>"Extract only stated facts. Do not infer. If a field is not mentioned, return empty list."</em> Use <code>response_format={"type": "json_object"}</code> or Claude's tool use / structured output mode.</p>
+    </div>
+    <div class="impl-box">
+      <p style="font-weight:500;margin-bottom:6px">Key rules for extraction prompts</p>
+      <ul>
+        <li>Always ask for the <strong>source sentence verbatim</strong> alongside each extracted item. This gives the analyst the page reference and lets you flag if the extraction was wrong.</li>
+        <li>Run extraction once per document, store the JSON in MySQL. Do not re-run on every query — extraction is expensive and deterministic.</li>
+        <li>For annual reports (200+ pages), chunk by section first (MDA, Risk Factors, Financials), extract each section separately, then merge.</li>
+      </ul>
+    </div>
+    <p style="margin-top:.5rem">Models to use: <code>claude-sonnet-4-20250514</code> for accuracy, <code>claude-haiku-4-5-20251001</code> for speed/cost on bulk runs. Do not use GPT-3.5 for financial extraction — it hallucinates numbers.</p>
+  </div>
+</div>
+
+<div class="method-card" id="m2">
+  <div class="method-head" onclick="toggle('m2')">
+    <div class="method-icon" style="background:#EEEDFE"><i class="ti ti-search" style="color:#534AB7;font-size:15px" aria-hidden="true"></i></div>
+    <div><div class="method-name">Document RAG (single-doc retrieval)</div><div class="method-sub">Feature 3 — find the right page, no generation</div></div>
+    <i class="ti ti-chevron-down chevron" id="ic-m2" aria-hidden="true"></i>
+  </div>
+  <div class="method-body" id="b-m2">
+    <p>Feature 3 (PDF section navigator) is retrieval only — no generation. Analyst types a search term; system returns the most relevant pages with surrounding context. The analyst reads the actual source. The AI does not paraphrase anything.</p>
+    <div class="impl-box">
+      <p style="font-weight:500;margin-bottom:6px">Chunking strategy for financial PDFs</p>
+      <ul>
+        <li><strong>Annual reports:</strong> Chunk by heading/section first (use pdfplumber + regex for "MANAGEMENT DISCUSSION", "RISK FACTORS", etc). Then split sections into 400-600 token chunks with 100-token overlap. Store <code>(ticker, doc_type, year, section_name, page_start, chunk_text)</code> in your vector store.</li>
+        <li><strong>Concall transcripts:</strong> Chunk by speaker turn. Each Q&A exchange is a natural chunk. Tag each chunk with <code>speaker_type: management | analyst</code>.</li>
+      </ul>
+    </div>
+    <div class="impl-box">
+      <p style="font-weight:500;margin-bottom:6px">Use hybrid search — not just embeddings</p>
+      <p>For financial text, BM25 keyword matching often beats pure embedding search for exact terms (ticker names, product names, specific metric names like "EBITDA margin"). Use <strong>hybrid retrieval</strong>: run both BM25 and embedding search, merge results with Reciprocal Rank Fusion (RRF), return top 5 chunks with page numbers.</p>
+      <p style="margin-top:6px">Implementation: <code>pgvector</code> for embeddings (add to PostgreSQL, or switch from MySQL for the vector store only) + <code>rank_bm25</code> Python library. Or use Qdrant which has hybrid search built in.</p>
+    </div>
+    <p>Embedding model: <code>text-embedding-3-small</code> (OpenAI) or <code>BAAI/bge-small-en-v1.5</code> (free, runs locally in Docker). For your scale (NIFTY 500 × ~5 years × ~2 doc types), the total corpus is manageable — under 5GB of embeddings.</p>
+  </div>
+</div>
+
+<div class="method-card" id="m3">
+  <div class="method-head" onclick="toggle('m3')">
+    <div class="method-icon" style="background:#E1F5EE"><i class="ti ti-files" style="color:#0F6E56;font-size:15px" aria-hidden="true"></i></div>
+    <div><div class="method-name">Multi-document RAG</div><div class="method-sub">Feature 8 — cross-doc retrieval + LLM synthesis with citations</div></div>
+    <i class="ti ti-chevron-down chevron" id="ic-m3" aria-hidden="true"></i>
+  </div>
+  <div class="method-body" id="b-m3">
+    <p>Feature 8 (evidence finder) is where classic RAG lives. The analyst poses a thesis claim; the system retrieves supporting and contradicting passages across all documents for that ticker, and the LLM synthesizes a response that cites specific pages. This is the most technically complex v2 feature.</p>
+    <div class="impl-box">
+      <p style="font-weight:500;margin-bottom:6px">RAG pipeline for evidence finder</p>
+      <ol style="margin:.3rem 0 0 1rem;padding:0">
+        <li><strong>Query:</strong> Analyst types "management expects margin expansion."</li>
+        <li><strong>Retrieve:</strong> Hybrid search across all docs for this ticker. Filter by <code>doc_type IN ('annual_report', 'concall')</code>. Return top 12 chunks.</li>
+        <li><strong>Rerank:</strong> Pass the 12 chunks through a cross-encoder reranker (<code>cross-encoder/ms-marco-MiniLM-L-6-v2</code> — runs locally, fast). Rerankers dramatically improve precision over raw embedding similarity for financial text. Keep top 5.</li>
+        <li><strong>Generate:</strong> LLM gets the 5 chunks + analyst query. Instruction: "Identify which chunks support this claim and which contradict it. Quote only from the provided text. Return source (doc, year, page) for every statement."</li>
+        <li><strong>Display:</strong> Show supporting evidence and contradicting evidence separately. Every sentence links to its source chunk and page.</li>
+      </ol>
+    </div>
+    <div class="impl-box">
+      <p style="font-weight:500;margin-bottom:6px">Metadata filtering is critical</p>
+      <p>Before embedding search, always pre-filter on structured metadata: <code>ticker = 'TCS'</code>, <code>year >= 2022</code>, <code>doc_type = 'annual_report'</code>. This reduces search space from 500k chunks to ~2k and dramatically improves precision. Never run a RAG query against the entire corpus without metadata pre-filtering.</p>
+    </div>
+  </div>
+</div>
+
+<div class="method-card" id="m4">
+  <div class="method-head" onclick="toggle('m4')">
+    <div class="method-icon" style="background:#FAEEDA"><i class="ti ti-robot" style="color:#854F0B;font-size:15px" aria-hidden="true"></i></div>
+    <div><div class="method-name">Agentic pipeline</div><div class="method-sub">Features 10, 12 — orchestrated multi-step LLM calls — v2/v3 only</div></div>
+    <i class="ti ti-chevron-down chevron" id="ic-m4" aria-hidden="true"></i>
+  </div>
+  <div class="method-body" id="b-m4">
+    <p>An agent is only justified when the task requires dynamic decision-making between steps — the output of step N determines what step N+1 does. Most of your features do not need this. Two do.</p>
+    <div class="impl-box">
+      <p style="font-weight:500;margin-bottom:6px">Feature 10: Sector intelligence (agentic)</p>
+      <p>The flow: (1) fetch all concall extractions for a sector + quarter from MySQL, (2) LLM clusters themes by topic (returns JSON groupings), (3) for each cluster with 3+ companies mentioning it, LLM generates a sector-level insight with company names, (4) store in <code>sector_themes</code> table. This requires dynamic branching because step 3 only runs for clusters that cross the threshold. A simple sequential pipeline won't handle that cleanly.</p>
+      <p style="margin-top:6px">Framework: Plain Python is fine. You don't need LangChain or LangGraph for this — those frameworks add abstraction overhead that makes debugging harder. Write the orchestration logic yourself in FastAPI background tasks.</p>
+    </div>
+    <div class="impl-box">
+      <p style="font-weight:500;margin-bottom:6px">Feature 12: Draft assistant (agentic generation)</p>
+      <p>Step 1: Analyst selects 3-5 saved insights from their workspace. Step 2: Agent retrieves the source passages for each insight via RAG. Step 3: LLM generates a draft paragraph where every claim cites a specific retrieved passage. Step 4: Compliance watermark appended automatically.</p>
+      <p style="margin-top:6px">This is the only feature with genuine LLM generation. Keep it to paragraph level — do not generate full-section reports.</p>
+    </div>
+    <p>Important: Do not use agents for features 1-9. Agents are slower (3-10x latency), more expensive, and harder to debug. A deterministic pipeline that does the same thing every time is better for a research tool than an agent that might decide to do something different.</p>
+  </div>
+</div>
+
+<div class="section-label">What not to use</div>
+
+<div class="skip-card">
+  <p style="font-size:14px;font-weight:500;color:var(--color-text-danger);margin:0 0 .5rem">LLM fine-tuning — skip entirely for now</p>
+  <p style="font-size:13px;margin:.3rem 0">Fine-tuning is the right tool when a base model consistently fails at a specific task AND you have 500+ labeled examples AND you've exhausted prompting improvements. You have none of these conditions yet.</p>
+  <ul style="font-size:13px">
+    <li><strong>For extraction (feature 4):</strong> Structured output + good prompting beats fine-tuning. Claude and GPT-4o already understand financial language including Indian company terminology. A well-designed schema + few-shot examples in the prompt will get you to 85-90% accuracy.</li>
+    <li><strong>For RAG (features 8, 10):</strong> Better chunking and reranking improves RAG quality more than fine-tuning the generator. Invest in retrieval quality first.</li>
+    <li><strong>When to revisit:</strong> After 6 months of production use, if you have labeled extraction errors across 1000+ documents and a specific failure pattern (e.g., Hindi-language sections misparse), then consider fine-tuning a small model (Llama 3 8B) specifically for that extraction task.</li>
+  </ul>
+</div>
+
+<div class="skip-card" style="border-color:var(--color-border-secondary)">
+  <p style="font-size:14px;font-weight:500;color:var(--color-text-secondary);margin:0 0 .5rem">Full agent frameworks (LangChain, AutoGPT, CrewAI) — avoid for v1</p>
+  <p style="font-size:13px;margin:.3rem 0">These frameworks obscure what your code is actually doing, make debugging hard, and add latency. For a financial research tool where every output must be traceable and correct, you want maximum control over each step. Write the orchestration yourself in Python. Use the Anthropic SDK or OpenAI SDK directly. Add frameworks only when plain Python becomes genuinely unmanageable.</p>
+</div>
+
+</div>
+<script>
+function toggle(id){
+  const body=document.getElementById('b-'+id);
+  const icon=document.getElementById('ic-'+id);
+  const isOpen=body.classList.contains('open');
+  document.querySelectorAll('.method-body').forEach(b=>b.classList.remove('open'));
+  document.querySelectorAll('[id^="ic-m"]').forEach(i=>{i.style.transform='';});
+  if(!isOpen){body.classList.add('open');icon.style.transform='rotate(180deg)';}
+}
+function expand(id){
+  const body=document.getElementById('b-'+id);
+  const icon=document.getElementById('ic-'+id);
+  document.querySelectorAll('.method-body').forEach(b=>b.classList.remove('open'));
+  document.querySelectorAll('[id^="ic-m"]').forEach(i=>{i.style.transform='';});
+  body.classList.add('open');
+  icon.style.transform='rotate(180deg)';
+  document.getElementById(id).scrollIntoView({behavior:'smooth',block:'start'});
+}
+</script>
