@@ -1,8 +1,317 @@
-## Architecture
-
-The system is built as a modular **FastAPI + ETL + MySQL** architecture designed for institutional-grade equity research workflows.
+The system is built as a modular **FastAPI + ETL + MySQL + MiniIO** architecture designed for institutional-grade equity research workflows.
 
 A structured ETL backbone continuously ingests and normalizes financial data, which is then exposed through API services and consumed by downstream LLM agents, research modules, and portfolio analytics systems.
+
+# Quant Copilot – AI Method Map
+
+## Feature → Method Map
+
+| # | Feature | Method | Phase |
+|---|----------|---------|--------|
+| 1 | Financial change detection | Pure SQL | v1 |
+| 2 | Peer comparison grid | Pure SQL | v1 |
+| 3 | PDF section navigator | Document RAG | v1 |
+| 4 | Concall structured extractor | Structured extraction | v1 |
+| 5 | Concall diff (QvQ) | SQL + Python diff | v1 |
+| 6 | Data conflict flag | Pure SQL | v1 |
+| 7 | Data freshness indicator | Metadata tracking | v1 |
+| 8 | Evidence finder | Multi-doc RAG | v2 |
+| 9 | Guidance accuracy tracker | Structured extraction + SQL | v2 |
+| 10 | Sector intelligence feed | Agentic pipeline | v2 |
+| 11 | Research workspace | Application layer | v2 |
+| 12 | Draft section assistant | Agentic + generation | v3 |
+| 13 | Shareholding divergence | Pure SQL | v3 |
+| 14 | API layer | Engineering only | v3 |
+
+---
+
+## Methods
+
+<details>
+<summary><b>Pure SQL / Rule-Based</b> (Features 1,2,5,6,7,13)</summary>
+
+### Purpose
+
+Seven of fourteen features require no AI.
+
+These features are deterministic calculations,
+joins, comparisons, and validations.
+
+### Financial Change Detection
+
+```sql
+SELECT metric,
+       curr_val,
+       prev_val,
+       (curr_val-prev_val)/prev_val*100 AS pct_delta
+FROM screener_quarterly
+WHERE ticker='TCS'
+ORDER BY period DESC
+LIMIT 2;
+```
+
+Store results in:
+
+```text
+metric_deltas
+```
+
+### Data Conflict Flag
+
+Compare:
+
+```text
+annual_report_value
+vs
+screener_value
+```
+
+Rule:
+
+```python
+abs(doc_val - screener_val) / screener_val > 0.02
+```
+
+If true:
+
+```text
+Insert conflict record
+```
+
+### Why SQL First?
+
+- Uses existing MySQL
+- Sub-100ms response times
+- Easy to audit
+- No AI costs
+- No hallucinations
+
+</details>
+
+---
+
+<details>
+<summary><b>LLM Structured Extraction</b> (Features 4,9)</summary>
+
+### Purpose
+
+Extract structured facts from documents.
+
+No RAG.
+
+No vector database.
+
+No retrieval.
+
+LLM acts as a parser.
+
+### Example Schema
+
+```python
+class ConcallExtract(BaseModel):
+    guidance: list[GuidanceItem]
+    risks: list[str]
+    capex_statements: list[CapexItem]
+    hiring_commentary: list[str]
+```
+
+### Prompt Rules
+
+- Extract only stated facts
+- Do not infer
+- Return empty list if absent
+- Include source sentence
+- Store output once in MySQL
+
+### Recommended Models
+
+- Claude Sonnet
+- Claude Haiku
+
+Avoid GPT-3.5 for financial extraction.
+
+</details>
+
+---
+
+<details>
+<summary><b>Document RAG</b> (Feature 3)</summary>
+
+### Purpose
+
+Single-document retrieval.
+
+No generation.
+
+Return relevant pages and sections.
+
+### Chunking Strategy
+
+#### Annual Reports
+
+- Chunk by section
+- 400–600 tokens
+- 100 token overlap
+
+Metadata:
+
+```text
+ticker
+doc_type
+year
+section_name
+page_start
+chunk_text
+```
+
+#### Concall Transcripts
+
+Chunk by speaker.
+
+Metadata:
+
+```text
+management
+analyst
+```
+
+### Retrieval
+
+Hybrid Search:
+
+- BM25
+- Embeddings
+- Reciprocal Rank Fusion
+
+Recommended:
+
+- Qdrant
+- pgvector
+- rank_bm25
+
+</details>
+
+---
+
+<details>
+<summary><b>Multi-Document RAG</b> (Feature 8)</summary>
+
+### Purpose
+
+Cross-document evidence retrieval.
+
+### Pipeline
+
+1. User enters thesis
+2. Hybrid retrieval
+3. Cross-encoder reranking
+4. LLM synthesis
+5. Evidence display
+
+### Reranker
+
+```text
+cross-encoder/ms-marco-MiniLM-L-6-v2
+```
+
+### Critical Rule
+
+Always filter by:
+
+```sql
+ticker
+year
+doc_type
+```
+
+before vector search.
+
+</details>
+
+---
+
+<details>
+<summary><b>Agentic Pipeline</b> (Features 10,12)</summary>
+
+### Feature 10
+
+Sector Intelligence Feed
+
+Flow:
+
+1. Fetch concall data
+2. Cluster themes
+3. Generate sector insights
+4. Store results
+
+### Feature 12
+
+Draft Assistant
+
+1. Analyst selects insights
+2. Retrieve evidence
+3. Generate paragraph
+4. Add compliance watermark
+
+### Recommendation
+
+Use:
+
+```text
+Plain Python
+FastAPI Background Tasks
+```
+
+Avoid:
+
+- LangChain
+- CrewAI
+- AutoGPT
+
+for v1.
+
+</details>
+
+---
+
+## What Not To Use
+
+### LLM Fine-Tuning
+
+Skip for now.
+
+Requirements before considering:
+
+- 500+ labeled examples
+- Repeated failure pattern
+- Prompt engineering exhausted
+
+Focus on:
+
+- Better extraction prompts
+- Better chunking
+- Better reranking
+
+---
+
+### Full Agent Frameworks
+
+Avoid for v1.
+
+Examples:
+
+- LangChain
+- CrewAI
+- AutoGPT
+
+Reasons:
+
+- Harder debugging
+- Added latency
+- Reduced transparency
+
+Use direct SDK integrations instead.
+## Architecture
 
 <p align="center">
   <img src="images/quant_copilot_pipeline_diagram.svg" 
