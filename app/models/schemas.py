@@ -22,7 +22,7 @@ class StockRequest(BaseModel):
         default=None,
         description=(
             "Optional list of section codes to run. "
-            "Valid codes: sm bs pl cf qr sh gm pr ti eh ee et er mc ca. "
+            "Valid codes: sm bs pl cf qr sh gm pr ti mc ca. "
             "Omit (or pass null) to run ALL sections."
         ),
         examples=[["bs", "pl", "pr"]],
