@@ -11,17 +11,15 @@ A structured ETL backbone continuously ingests and normalizes financial data, wh
 | 1 | Financial change detection | Pure SQL | v1 |
 | 2 | Peer comparison grid | Pure SQL | v1 |
 | 3 | PDF section navigator | Document RAG | v1 |
-| 4 | Concall structured extractor | Structured extraction | v1 |
-| 5 | Concall diff (QvQ) | SQL + Python diff | v1 |
-| 6 | Data conflict flag | Pure SQL | v1 |
-| 7 | Data freshness indicator | Metadata tracking | v1 |
-| 8 | Evidence finder | Multi-doc RAG | v2 |
-| 9 | Guidance accuracy tracker | Structured extraction + SQL | v2 |
-| 10 | Sector intelligence feed | Agentic pipeline | v2 |
-| 11 | Research workspace | Application layer | v2 |
-| 12 | Draft section assistant | Agentic + generation | v3 |
-| 13 | Shareholding divergence | Pure SQL | v3 |
-| 14 | API layer | Engineering only | v3 |
+| 4 | Concall diff (QvQ) | SQL + Python diff | v1 |
+| 5 | Data conflict flag | Pure SQL | v1 |
+| 6 | Data freshness indicator | Metadata tracking | v1 |
+| 7 | Evidence finder | Multi-doc RAG | v2 |
+| 8 | Sector intelligence feed | Agentic pipeline | v2 |
+| 9 | Research workspace | Application layer | v2 |
+| 10 | Draft section assistant | Agentic + generation | v3 |
+| 11 | Shareholding divergence | Pure SQL | v3 |
+| 12 | API layer | Engineering only | v3 |
 
 ---
 
@@ -88,49 +86,8 @@ Insert conflict record
 
 </details>
 
----
 
-<details>
-<summary><b>LLM Structured Extraction</b> (Features 4,9)</summary>
 
-### Purpose
-
-Extract structured facts from documents.
-
-No RAG.
-
-No vector database.
-
-No retrieval.
-
-LLM acts as a parser.
-
-### Example Schema
-
-```python
-class ConcallExtract(BaseModel):
-    guidance: list[GuidanceItem]
-    risks: list[str]
-    capex_statements: list[CapexItem]
-    hiring_commentary: list[str]
-```
-
-### Prompt Rules
-
-- Extract only stated facts
-- Do not infer
-- Return empty list if absent
-- Include source sentence
-- Store output once in MySQL
-
-### Recommended Models
-
-- Claude Sonnet
-- Claude Haiku
-
-Avoid GPT-3.5 for financial extraction.
-
-</details>
 
 ---
 
