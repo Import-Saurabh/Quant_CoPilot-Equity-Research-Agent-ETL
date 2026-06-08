@@ -16,6 +16,118 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 services:
+  airflow-init:
+    image: apache/airflow:2.9.3-python3.11
+    container_name: quant_airflow_init
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-quant_airflow_secret}
+      AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+      _PIP_ADDITIONAL_REQUIREMENTS: "-r /opt/airflow/project/requirements.txt"
+      PYTHONPATH: /opt/airflow/project
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_SECURE: "false"
+    volumes:
+      - airflow_home:/opt/airflow
+      - ./dags:/opt/airflow/dags:ro
+      - .:/opt/airflow/project:ro
+    command: >
+      bash -c "airflow db migrate &&
+      airflow users create
+      --username $${AIRFLOW_ADMIN_USER:-admin}
+      --password $${AIRFLOW_ADMIN_PASSWORD:-admin}
+      --firstname Quant
+      --lastname Admin
+      --role Admin
+      --email $${AIRFLOW_ADMIN_EMAIL:-admin@example.com} || true"
+    networks:
+      - quant_net
+
+  airflow-webserver:
+    image: apache/airflow:2.9.3-python3.11
+    container_name: quant_airflow_webserver
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-quant_airflow_secret}
+      AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+      _PIP_ADDITIONAL_REQUIREMENTS: "-r /opt/airflow/project/requirements.txt"
+      PYTHONPATH: /opt/airflow/project
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_SECURE: "false"
+    ports:
+      - "${AIRFLOW_HOST_PORT:-8081}:8080"
+    volumes:
+      - airflow_home:/opt/airflow
+      - ./dags:/opt/airflow/dags:ro
+      - .:/opt/airflow/project:ro
+    command: webserver
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - quant_net
+
+  airflow-scheduler:
+    image: apache/airflow:2.9.3-python3.11
+    container_name: quant_airflow_scheduler
+    restart: unless-stopped
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    environment:
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_SECRET_KEY:-quant_airflow_secret}
+      AIRFLOW_UID: ${AIRFLOW_UID:-50000}
+      _PIP_ADDITIONAL_REQUIREMENTS: "-r /opt/airflow/project/requirements.txt"
+      PYTHONPATH: /opt/airflow/project
+      DB_HOST: db
+      DB_PORT: "3306"
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_SECURE: "false"
+    volumes:
+      - airflow_home:/opt/airflow
+      - ./dags:/opt/airflow/dags:ro
+      - .:/opt/airflow/project:ro
+    command: scheduler
+    networks:
+      - quant_net
 
   # ── MySQL ────────────────────────────────────────────────────────────────
   db:
@@ -151,6 +263,9 @@ volumes:
     driver: local
 
 # ── Docker Network ───────────────────────────────────────────────────────────
+  airflow_home:
+    driver: local
+
 networks:
   quant_net:
     driver: bridge
