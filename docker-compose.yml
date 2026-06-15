@@ -269,3 +269,4 @@ volumes:
 networks:
   quant_net:
     driver: bridge
+# etl compose.yml minio io contains concall / annual report in pdf format and mysql contains sturcture data and metadata of the pdf files.
