@@ -116,12 +116,14 @@ Successfully tagged
 
 ```powershell
 docker compose up -d
+docker compose --profile tools up -d
 ```
 
 Or rebuild and start:
 
 ```powershell
 docker compose up --build -d
+docker compose --profile tools up -d
 ```
 
 ---
