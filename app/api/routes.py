@@ -173,27 +173,41 @@ def ingest_stock(payload: StockRequest, request: Request):
 # POST — document ingestion
 # ─────────────────────────────────────────────────────────────────────────────
 
-@router.post(
-    "/ingest-docs",
-    response_model=DocIngestResponse,
+@router.get(
+    "/stocks/{symbol}/documents",
+    response_model=PdfDocumentsResponse,
     tags=["documents"],
-    summary="Scrape & upload PDFs to MinIO for a stock",
+    summary="Annual reports & concall transcripts stored in MinIO",
 )
-def ingest_docs(payload: DocRequest, request: Request):
-    logger.info("POST /ingest-docs symbol=%s", payload.symbol)
-    try:
-        result = execute_doc_pipeline(payload.symbol)
-        if result["status"] == "failed":
-            raise HTTPException(status_code=500, detail=result["message"])
-        return result
-    except HTTPException:
-        raise
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        logger.exception("Unexpected error in /ingest-docs for %s", payload.symbol)
-        raise HTTPException(status_code=500, detail=f"Internal server error: {exc}")
+def get_documents(
+    symbol: str,
+    doc_type: Optional[str] = Query(None, description="annual_report | concall_transcript"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+):
+    symbol = _require_symbol(symbol)
+    _stock_must_exist(symbol)
+    limit, offset = _paginate(limit, offset)
 
+    clauses = ["symbol = %s"]
+    params: list = [symbol]
+    if doc_type:
+        clauses.append("document_type = %s")
+        params.append(doc_type)
+
+    where_sql = "WHERE " + " AND ".join(clauses)
+    total = _count("pdf_documents", where_sql, tuple(params))
+    rows = _run(
+        f"SELECT id, symbol, document_type AS doc_type, file_name AS title, "
+        f"fiscal_year AS year, object_path AS minio_key, uploaded_at AS created_at "
+        f"FROM pdf_documents {where_sql} "
+        f"ORDER BY fiscal_year DESC, uploaded_at DESC LIMIT %s OFFSET %s",
+        (*params, limit, offset),
+    )
+    return PdfDocumentsResponse(
+        data=rows,
+        meta=PaginationMeta(total=total, limit=limit, offset=offset),
+    )
 
 # ═════════════════════════════════════════════════════════════════════════════
 # GET — STOCKS MASTER
