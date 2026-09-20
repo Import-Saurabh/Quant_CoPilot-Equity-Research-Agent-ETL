@@ -11,3 +11,5 @@ pyMySQL
 mysql-connector-python==9.5.0
 minio
 lxml
+pandas-ta
+mangum
