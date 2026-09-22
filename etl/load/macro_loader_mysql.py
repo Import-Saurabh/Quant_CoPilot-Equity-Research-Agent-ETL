@@ -133,7 +133,7 @@ def load_rbi_rates(db_config: dict, data: dict):
         "SELECT repo_rate FROM rbi_rates ORDER BY id DESC LIMIT 1"
     )
     last = cursor.fetchone()
-    if last and float(last[0]) == float(data.get("repo_rate", 0)):
+    if last and float(last["repo_rate"]) == float(data.get("repo_rate", 0)):
         cursor.close()
         conn.close()
         print(f"  ⏭  rbi_rates: repo_rate unchanged ({data.get('repo_rate')}%) — skipping")
