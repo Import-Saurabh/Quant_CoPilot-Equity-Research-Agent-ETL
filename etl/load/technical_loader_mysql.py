@@ -140,25 +140,24 @@ def load_technicals(db_config: dict, df: pd.DataFrame, symbol: str):
              supertrend, supertrend_dir)
         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        AS new
         ON DUPLICATE KEY UPDATE
-            close           = new.close,
-            rsi_14          = new.rsi_14,
-            macd            = new.macd,
-            macd_signal     = new.macd_signal,
-            macd_hist       = new.macd_hist,
-            sma_50          = new.sma_50,
-            sma_200         = new.sma_200,
-            ema_21          = new.ema_21,
-            bb_mid          = new.bb_mid,
-            bb_upper        = new.bb_upper,
-            bb_lower        = new.bb_lower,
-            atr_14          = new.atr_14,
-            adx_14          = new.adx_14,
-            vwap_14         = new.vwap_14,
-            obv             = new.obv,
-            supertrend      = new.supertrend,
-            supertrend_dir  = new.supertrend_dir
+            close           = VALUES(close),
+            rsi_14          = VALUES(rsi_14),
+            macd            = VALUES(macd),
+            macd_signal     = VALUES(macd_signal),
+            macd_hist       = VALUES(macd_hist),
+            sma_50          = VALUES(sma_50),
+            sma_200         = VALUES(sma_200),
+            ema_21          = VALUES(ema_21),
+            bb_mid          = VALUES(bb_mid),
+            bb_upper        = VALUES(bb_upper),
+            bb_lower        = VALUES(bb_lower),
+            atr_14          = VALUES(atr_14),
+            adx_14          = VALUES(adx_14),
+            vwap_14         = VALUES(vwap_14),
+            obv             = VALUES(obv),
+            supertrend      = VALUES(supertrend),
+            supertrend_dir  = VALUES(supertrend_dir)
     """, rows)
 
     conn.commit()
