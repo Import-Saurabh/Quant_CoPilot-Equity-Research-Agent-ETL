@@ -40,8 +40,8 @@ DEBUG_LOG_PATH = "debug-597278.log"
 
 # ── Bucket names per doc_type ─────────────────────────────────────────────────
 BUCKET_MAP = {
-    "annual_report": "annual-reports",
-    "concall":       "concall-transcripts",
+    "annual_report": os.getenv("MINIO_BUCKET", "quant-copilot-docs"),
+    "concall":       os.getenv("MINIO_BUCKET", "quant-copilot-docs"),
 }
 
 # ── Retry / back-off ──────────────────────────────────────────────────────────
@@ -194,7 +194,7 @@ def upload_document(doc: dict, session: requests.Session) -> str | None:
     title    = _safe_name(doc.get("title", "document"))
 
     bucket   = BUCKET_MAP.get(dtype, "other-documents")
-    obj_name = f"{symbol}/{year}_{title}.pdf"
+    obj_name = f"{dtype}/{symbol}/{year}_{title}.pdf"
 
     if not _is_probable_pdf_url(url):
         _debug_log(
@@ -338,3 +338,4 @@ def upload_document(doc: dict, session: requests.Session) -> str | None:
     except Exception as exc:
         logger.error("Unexpected MinIO error for %s: %s", obj_name, exc)
         return None
+
